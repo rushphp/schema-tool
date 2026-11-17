@@ -39,14 +39,14 @@
     "require": {
         "php": "^8.3",
         "ext-pdo": "*",
-        "rushphp/contract": "^1.0",
-        "rushphp/support": "^1.0"
+        "rushphp/contract": "^0.1",
+        "rushphp/support": "^0.1"
     },
     "require-dev": {
         "ext-pdo_sqlite": "*",
         "phpstan/phpstan": "^2.2",
         "pestphp/pest": "^3.8",
-        "rushphp/rush": "^1.0"
+        "rushphp/rush": "^0.1"
     },
     "suggest": {
         "ext-pdo_sqlite": "For the sqlite driver",

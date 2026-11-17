@@ -8,6 +8,8 @@
 
 Structural database schema versioning for [RUSH](https://github.com/rushphp/rush).
 
+> **Pre-1.0:** minor releases may include breaking changes.
+
 ## 📦 Installation
 
 ```bash
