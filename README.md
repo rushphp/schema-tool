@@ -1,3 +1,5 @@
+[English](README.md) | [Português](README.pt.md)
+
 ![PHP](https://img.shields.io/badge/PHP-%20^8.3-777BB4)
 ![PHPStan-Level](https://img.shields.io/badge/PHPStan-Level%209-224488)
 ![License](https://img.shields.io/badge/License-MIT-777)
@@ -50,14 +52,6 @@ out of the box; MySQL and PostgreSQL need their PDO extensions.
 ```
 
 The whole `.rush/` directory is local state and must not be committed.
-
-## 🧠 Design pillars
-
-1. Simplicity
-2. Maintainability
-3. Performance
-4. Portability (decoupling)
-5. Security
 
 ## 🤝 Contributions
 

@@ -22,7 +22,7 @@ final class SchemaTool implements ToolInterface
 
     public function name(): string
     {
-        return 'Schema';
+        return 'schema';
     }
 
     public function description(): string

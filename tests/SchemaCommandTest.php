@@ -106,5 +106,5 @@ test('schema tool registers its commands', function () {
     expect(array_keys($tool->commands(sys_get_temp_dir())))->toBe([
         'schema init',
         'schema status',
-    ])->and($tool->name())->toBe('Schema');
+    ])->and($tool->name())->toBe('schema');
 });
