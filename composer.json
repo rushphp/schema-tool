@@ -1,0 +1,65 @@
+{
+    "name": "rushphp/schema-tool",
+    "description": "RUSH schema tool. Structural database schema versioning for SQLite, MySQL/MariaDB and PostgreSQL.",
+    "type": "library",
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "RUSHphp",
+            "homepage": "https://github.com/rushphp"
+        }
+    ],
+    "keywords": [
+        "rush",
+        "cli",
+        "database",
+        "schema",
+        "migration",
+        "sqlite",
+        "mysql",
+        "mariadb",
+        "postgresql"
+    ],
+    "support": {
+        "issues": "https://github.com/rushphp/schema-tool/issues",
+        "source": "https://github.com/rushphp/schema-tool"
+    },
+    "autoload": {
+        "psr-4": {
+            "Rush\\Tool\\Schema\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Tests\\": "tests/"
+        }
+    },
+    "require": {
+        "php": "^8.3",
+        "ext-pdo": "*",
+        "rushphp/contract": "^1.0",
+        "rushphp/support": "^1.0"
+    },
+    "require-dev": {
+        "ext-pdo_sqlite": "*",
+        "phpstan/phpstan": "^2.2",
+        "pestphp/pest": "^3.8",
+        "rushphp/rush": "^1.0"
+    },
+    "suggest": {
+        "ext-pdo_sqlite": "For the sqlite driver",
+        "ext-pdo_mysql": "For the mysql/mariadb driver",
+        "ext-pdo_pgsql": "For the postgres driver"
+    },
+    "scripts": {
+        "stan": "phpstan analyse",
+        "test": "pest"
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    }
+}
