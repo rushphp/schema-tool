@@ -89,3 +89,66 @@ test('rejects target driver override', function () {
     expect(fn () => Config::load($root))
         ->toThrow(RuntimeException::class, 'must not override the database driver');
 });
+
+
+test('requires explicit database when multiple are configured', function () {
+    $data = SchemaFixtures::config();
+    $data['databases']['analytics'] = [
+        'driver' => 'sqlite',
+        'targets' => [
+            'local' => ['transport' => 'local', 'database' => 'storage/analytics.sqlite'],
+        ],
+    ];
+    $root = schemaConfigFile($data);
+    $config = Config::load($root);
+
+    expect($config->names())->toBe(['default', 'analytics'])
+        ->and(fn () => $config->database())
+        ->toThrow(RuntimeException::class, 'multiple databases configured')
+        ->and($config->database('analytics')->name)->toBe('analytics');
+});
+
+
+test('accepts custom target names with a local target', function () {
+    $data = SchemaFixtures::config();
+    $data['databases']['default']['targets']['qa'] = [
+        'transport' => 'local',
+        'database' => 'storage/qa.sqlite',
+    ];
+    $root = schemaConfigFile($data);
+    $config = Config::load($root);
+
+    expect($config->database('default')->names())->toContain('qa');
+});
+
+
+test('http transport supports insecure mode explicitly', function () {
+    $data = SchemaFixtures::config();
+    $data['databases']['default']['targets']['prod'] = [
+        'transport' => 'http',
+        'url' => 'http://example.com/agent.php',
+        'database' => 'default',
+        'token_file' => '.rush/schema/tokens/prod',
+        'secure' => false,
+    ];
+    $root = schemaConfigFile($data);
+    $config = Config::load($root);
+
+    expect($config->database('default')->target('prod')->isHttp())->toBeTrue()
+        ->and($config->database('default')->target('prod')->secure)->toBeFalse();
+});
+
+
+test('http transport requires https when secure is true', function () {
+    $data = SchemaFixtures::config();
+    $data['databases']['default']['targets']['prod'] = [
+        'transport' => 'http',
+        'url' => 'http://example.com/agent.php',
+        'database' => 'default',
+        'token_file' => '.rush/schema/tokens/prod',
+    ];
+    $root = schemaConfigFile($data);
+
+    expect(fn () => Config::load($root))
+        ->toThrow(RuntimeException::class, 'requires an https url');
+});

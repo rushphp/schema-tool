@@ -3,18 +3,21 @@
 namespace Rush\Tool\Schema;
 
 use JsonException;
-use RuntimeException;
 use Rush\Tool\Schema\Config\DatabaseConfig;
 use Rush\Tool\Schema\Config\TargetConfig;
+use Rush\Tool\Schema\Exception\ConfigException;
 
 
 final class Config
 {
     /** @var list<string> */
-    public const TARGETS = ['local', 'development', 'staging', 'production'];
+    public const SUGGESTED_TARGETS = ['local', 'development', 'staging', 'production'];
 
     /** @var list<string> */
-    public const DRIVERS = ['sqlite', 'mysql', 'pgsql'];
+    public const DRIVERS = ['sqlite', 'mysql'];
+
+    /** @var list<string> */
+    public const TRANSPORTS = ['local', 'ssh', 'http'];
 
     /** @var array<string, DatabaseConfig> */
     private array $databases;
@@ -32,40 +35,40 @@ final class Config
         $file = rtrim($projectRoot, '/') .'/.rush/schema/config.json';
 
         if ( ! is_file($file) || ! is_readable($file)) {
-            throw new RuntimeException('schema: .rush/schema/config.json not found or unreadable');
+            throw new ConfigException('schema: .rush/schema/config.json not found or unreadable');
         }
 
         $raw = file_get_contents($file);
 
         if ($raw === false) {
-            throw new RuntimeException('schema: could not read .rush/schema/config.json');
+            throw new ConfigException('schema: could not read .rush/schema/config.json');
         }
 
         try {
             $data = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
         } catch (JsonException $exception) {
-            throw new RuntimeException('schema: invalid .rush/schema/config.json: '. $exception->getMessage(), 0, $exception);
+            throw new ConfigException('schema: invalid .rush/schema/config.json: '. $exception->getMessage(), 0, $exception);
         }
 
         if ( ! is_array($data)) {
-            throw new RuntimeException('schema: .rush/schema/config.json must contain an object');
+            throw new ConfigException('schema: .rush/schema/config.json must contain an object');
         }
 
         $definitions = $data['databases'] ?? null;
 
         if ( ! is_array($definitions) || $definitions === []) {
-            throw new RuntimeException("schema: 'databases' must be a non-empty object");
+            throw new ConfigException("schema: 'databases' must be a non-empty object");
         }
 
         $databases = [];
 
         foreach ($definitions as $name => $definition) {
             if ( ! is_string($name) || preg_match('/\A[a-z][a-z0-9_-]*\z/', $name) !== 1) {
-                throw new RuntimeException('schema: invalid database name');
+                throw new ConfigException('schema: invalid database name');
             }
 
             if ( ! is_array($definition)) {
-                throw new RuntimeException("schema: database '{$name}' must be an object");
+                throw new ConfigException("schema: database '{$name}' must be an object");
             }
 
             $databases[$name] = self::buildDatabase($name, $definition);
@@ -75,10 +78,22 @@ final class Config
     }
 
 
-    public function database(string $name = 'default'): DatabaseConfig
+    public function database(?string $name = null): DatabaseConfig
     {
+        if ($name === null || $name === '') {
+            $names = $this->names();
+
+            if (count($names) === 1) {
+                return $this->databases[$names[0]];
+            }
+
+            throw new ConfigException(
+                'schema: multiple databases configured; use --database. available: '. implode(', ', $names),
+            );
+        }
+
         if ( ! isset($this->databases[$name])) {
-            throw new RuntimeException(
+            throw new ConfigException(
                 "schema: unknown database '{$name}'. available: ". implode(', ', $this->names()),
             );
         }
@@ -100,7 +115,7 @@ final class Config
         $driver = self::requiredString($definition, 'driver');
 
         if ( ! in_array($driver, self::DRIVERS, true)) {
-            throw new RuntimeException(
+            throw new ConfigException(
                 "schema: database '{$name}' has invalid driver '{$driver}'. use: ". implode(', ', self::DRIVERS),
             );
         }
@@ -109,27 +124,25 @@ final class Config
         $targets = $definition['targets'] ?? null;
 
         if ( ! is_array($targets) || $targets === []) {
-            throw new RuntimeException("schema: database '{$name}' requires a non-empty 'targets' object");
+            throw new ConfigException("schema: database '{$name}' requires a non-empty 'targets' object");
         }
 
         $parsed = [];
 
         foreach ($targets as $targetName => $target) {
-            if ( ! is_string($targetName) || ! in_array($targetName, self::TARGETS, true)) {
-                throw new RuntimeException(
-                    "schema: database '{$name}' has invalid target '{$targetName}'. use: ". implode(', ', self::TARGETS),
-                );
+            if ( ! is_string($targetName) || preg_match('/\A[a-z][a-z0-9_-]*\z/', $targetName) !== 1) {
+                throw new ConfigException("schema: database '{$name}' has invalid target name");
             }
 
             if ( ! is_array($target)) {
-                throw new RuntimeException("schema: target '{$targetName}' must be an object");
+                throw new ConfigException("schema: target '{$targetName}' must be an object");
             }
 
             $parsed[$targetName] = self::target($targetName, $driver, $target);
         }
 
         if ( ! isset($parsed['local'])) {
-            throw new RuntimeException("schema: database '{$name}' requires a 'local' target");
+            throw new ConfigException("schema: database '{$name}' requires a 'local' target");
         }
 
         return new DatabaseConfig($name, $driver, $version, $parsed);
@@ -141,28 +154,31 @@ final class Config
     {
         $transport = self::requiredString($target, 'transport');
 
-        if ( ! in_array($transport, ['local', 'ssh'], true)) {
-            throw new RuntimeException(
-                "schema: target '{$name}' has invalid transport '{$transport}'. use: local, ssh",
+        if ( ! in_array($transport, self::TRANSPORTS, true)) {
+            throw new ConfigException(
+                "schema: target '{$name}' has invalid transport '{$transport}'. use: ". implode(', ', self::TRANSPORTS),
             );
         }
 
         foreach ($target as $key => $value) {
             if (is_string($key) && $key === 'driver') {
-                throw new RuntimeException("schema: target '{$name}' must not override the database driver");
+                throw new ConfigException("schema: target '{$name}' must not override the database driver");
             }
         }
 
         $database = self::requiredString($target, 'database');
+
+        if ($transport === 'http') {
+            return self::httpTarget($name, $driver, $database, $target);
+        }
+
         $host = self::optionalString($target, 'host');
-        $port = self::optionalInt($target, 'port', $driver === 'pgsql' ? 5432 : 3306);
+        $port = self::optionalInt($target, 'port', 3306);
         $user = self::optionalString($target, 'user');
         $password = self::optionalString($target, 'password');
 
-        if ($driver !== 'sqlite') {
-            if ($host === null || $user === null) {
-                throw new RuntimeException("schema: target '{$name}' requires 'host' and 'user'");
-            }
+        if ($driver === 'mysql' && ($host === null || $user === null)) {
+            throw new ConfigException("schema: target '{$name}' requires 'host' and 'user'");
         }
 
         if ($transport === 'local') {
@@ -181,14 +197,8 @@ final class Config
         $ssh = $target['ssh'] ?? null;
 
         if ( ! is_array($ssh)) {
-            throw new RuntimeException("schema: target '{$name}' requires an 'ssh' object");
+            throw new ConfigException("schema: target '{$name}' requires an 'ssh' object");
         }
-
-        $sshHost = self::requiredString($ssh, 'host');
-        $sshUser = self::requiredString($ssh, 'user');
-        $sshPort = self::optionalInt($ssh, 'port', 22);
-        $sshIdentity = self::optionalString($ssh, 'identity');
-        $phpBinary = self::requiredString($ssh, 'php_binary');
 
         return new TargetConfig(
             $name,
@@ -199,11 +209,50 @@ final class Config
             $port,
             $user,
             $password,
-            $sshHost,
-            $sshPort,
-            $sshUser,
-            $sshIdentity,
-            $phpBinary,
+            true,
+            null,
+            null,
+            self::requiredString($ssh, 'host'),
+            self::optionalInt($ssh, 'port', 22),
+            self::requiredString($ssh, 'user'),
+            self::optionalString($ssh, 'identity'),
+            self::optionalString($ssh, 'password_file'),
+            self::requiredString($ssh, 'php_binary'),
+        );
+    }
+
+
+    /** @param array<array-key, mixed> $target */
+    private static function httpTarget(string $name, string $driver, string $database, array $target): TargetConfig
+    {
+        $url = self::requiredString($target, 'url');
+        $secure = self::optionalBool($target, 'secure', true);
+
+        if ($secure && ! str_starts_with($url, 'https://')) {
+            throw new ConfigException("schema: target '{$name}' requires an https url when secure is true");
+        }
+
+        $host = self::optionalString($target, 'host');
+        $port = self::optionalInt($target, 'port', 3306);
+        $user = self::optionalString($target, 'user');
+        $password = self::optionalString($target, 'password');
+
+        if ($driver === 'mysql' && ($host === null || $user === null)) {
+            throw new ConfigException("schema: target '{$name}' requires 'host' and 'user'");
+        }
+
+        return new TargetConfig(
+            $name,
+            'http',
+            $database,
+            $driver,
+            $host,
+            $port,
+            $user,
+            $password,
+            $secure,
+            $url,
+            self::requiredString($target, 'token_file'),
         );
     }
 
@@ -214,7 +263,7 @@ final class Config
         $value = $data[$key] ?? null;
 
         if ( ! is_string($value) || trim($value) === '') {
-            throw new RuntimeException("schema: '{$key}' must be a non-empty string");
+            throw new ConfigException("schema: '{$key}' must be a non-empty string");
         }
 
         return trim($value);
@@ -231,7 +280,7 @@ final class Config
         }
 
         if ( ! is_string($value) || trim($value) === '') {
-            throw new RuntimeException("schema: '{$key}' must be a non-empty string");
+            throw new ConfigException("schema: '{$key}' must be a non-empty string");
         }
 
         return trim($value);
@@ -244,7 +293,20 @@ final class Config
         $value = $data[$key] ?? $default;
 
         if ( ! is_int($value) || $value < 1) {
-            throw new RuntimeException("schema: '{$key}' must be a positive integer");
+            throw new ConfigException("schema: '{$key}' must be a positive integer");
+        }
+
+        return $value;
+    }
+
+
+    /** @param array<array-key, mixed> $data */
+    private static function optionalBool(array $data, string $key, bool $default): bool
+    {
+        $value = $data[$key] ?? $default;
+
+        if ( ! is_bool($value)) {
+            throw new ConfigException("schema: '{$key}' must be a boolean");
         }
 
         return $value;

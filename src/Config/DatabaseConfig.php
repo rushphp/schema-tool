@@ -2,7 +2,7 @@
 
 namespace Rush\Tool\Schema\Config;
 
-use RuntimeException;
+use Rush\Tool\Schema\Exception\ConfigException;
 
 
 final class DatabaseConfig
@@ -22,7 +22,7 @@ final class DatabaseConfig
     public function target(string $name): TargetConfig
     {
         if ( ! isset($this->targets[$name])) {
-            throw new RuntimeException(
+            throw new ConfigException(
                 "schema: database '{$this->name}' has no target '{$name}'. available: ". implode(', ', $this->names()),
             );
         }
@@ -37,9 +37,7 @@ final class DatabaseConfig
     }
 
 
-    /**
-     * @return list<string>
-     */
+    /** @return list<string> */
     public function names(): array
     {
         return array_keys($this->targets);
