@@ -3,6 +3,13 @@
   "build": {
     "dockerfile": "Dockerfile"
   },
+  "postStartCommand": "bash ${containerWorkspaceFolder}/.devcontainer/mariadb.sh",
+  "containerEnv": {
+    "SCHEMA_MYSQL_HOST": "127.0.0.1",
+    "SCHEMA_MYSQL_PORT": "3306",
+    "SCHEMA_MYSQL_USER": "schema",
+    "SCHEMA_MYSQL_PASSWORD": "schema"
+  },
 
   "customizations": {
     "vscode": {

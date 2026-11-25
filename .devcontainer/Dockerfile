@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     unzip \
     libonig-dev \
     libxml2-dev \
+    mariadb-server \
     mariadb-client \
     && docker-php-ext-install -j"$(nproc)" dom mbstring pdo_mysql \
     && rm -rf /var/lib/apt/lists/*
