@@ -18,4 +18,10 @@ final class SchemaHasher
     {
         return 'sha256:'. hash('sha256', CanonicalJson::encode($data));
     }
+
+
+    public static function hashSql(string $sql): string
+    {
+        return 'sha256:'. hash('sha256', $sql);
+    }
 }

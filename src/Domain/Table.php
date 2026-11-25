@@ -12,6 +12,7 @@ final class Table
      * @param list<string> $primaryKey
      * @param array<string, Index> $indexes
      * @param array<string, ForeignKey> $foreignKeys
+     * @param array<string, mixed> $options
      */
     public function __construct(
         public readonly string $name,
@@ -19,6 +20,7 @@ final class Table
         public readonly array $primaryKey,
         public readonly array $indexes,
         public readonly array $foreignKeys,
+        public readonly array $options = [],
     ) {
     }
 
@@ -59,6 +61,7 @@ final class Table
             self::strings($data['primaryKey'] ?? null),
             $indexes,
             $foreignKeys,
+            self::map($data['options'] ?? null),
         );
     }
 
@@ -103,6 +106,7 @@ final class Table
             'primaryKey' => $this->primaryKey,
             'indexes' => $indexes === [] ? new stdClass() : $indexes,
             'foreignKeys' => $foreignKeys === [] ? new stdClass() : $foreignKeys,
+            'options' => $this->options === [] ? new stdClass() : $this->options,
         ];
     }
 

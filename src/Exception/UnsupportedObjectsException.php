@@ -2,10 +2,8 @@
 
 namespace Rush\Tool\Schema\Exception;
 
-use RuntimeException;
 
-
-final class UnsupportedObjectsException extends RuntimeException
+final class UnsupportedObjectsException extends SchemaException
 {
     /**
      * @param list<string> $objects
@@ -14,7 +12,7 @@ final class UnsupportedObjectsException extends RuntimeException
     {
         return new self(
             'database contains unsupported objects: '. implode(', ', $objects)
-            .'. Schema manages structure only. Move triggers, procedures and functions to the application.',
+            .'. Schema manages structure only. Move triggers, procedures, functions and other unsupported objects to the application.',
         );
     }
 }
