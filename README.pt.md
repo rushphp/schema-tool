@@ -94,17 +94,56 @@ Transportes:
 rush schema agent:export -p public/rush-schema-agent.php
 ```
 
-Crie `agent.config.json` ao lado do agente (ou aponte
-`RUSH_SCHEMA_AGENT_CONFIG`):
+Crie `schema.remote.json` fora do webroot (veja
+[`resources/remote/schema.remote.example.json`](resources/remote/schema.remote.example.json)) e aponte
+`RUSH_SCHEMA_AGENT_CONFIG` para o caminho absoluto:
+
+```env
+RUSH_SCHEMA_AGENT_CONFIG=/srv/app/schema.remote.json
+```
 
 ```json
 {
-    "token": "change-me"
+    "format": 1,
+    "token": "change-me",
+    "databases": {
+        "app": {
+            "driver": "mysql",
+            "host": "127.0.0.1",
+            "database": "app",
+            "user": "schema",
+            "password": "secret"
+        }
+    }
 }
 ```
 
-Use o mesmo token em `.rush/schema/tokens/<target>` e referencie em
-`token_file`.
+- Permissão `0600`.
+- O token do JSON precisa ser igual ao `.rush/schema/tokens/<target>`.
+- Credenciais do banco nunca saem do servidor.
+- `database` no target HTTP local é a chave no `schema.remote.json`.
+
+## 🧬 Suporte de bancos
+
+Baselines LTS suportados:
+
+- MySQL 8.4 LTS
+- MariaDB 10.11 LTS e 11.8 LTS
+
+Estrutura suportada:
+
+- tabelas, colunas, PK, índices (incluindo prefixo e DESC)
+- unique constraints, foreign keys e views simples
+- `CHECK` constraints (apenas enforçados, MySQL/MariaDB)
+- defaults com `ON UPDATE`
+- JSON same-flavor: `json` nativo no MySQL, `LONGTEXT` + check no MariaDB
+
+Push cross-flavor é bloqueado. Comentários não são gerenciados.
+
+Ainda não suportado (recusado com erro claro): CHECK constraints no SQLite,
+colunas geradas, partições,
+sequences, system versioning, índices funcionais/expression, colunas/índices
+invisíveis, fulltext/spatial e `CHECK ... NOT ENFORCED`.
 
 ## 🔐 Segurança
 
@@ -113,8 +152,7 @@ Use o mesmo token em `.rush/schema/tokens/<target>` e referencie em
   não-interativo exige também `--yes`.
 - `down` restaura estrutura, não dados. O backup é a rede de segurança.
 - Renames hoje são tratados como drop + add.
-- CHECK constraints, colunas geradas, índices de expressão/fulltext, triggers,
-  routines e events do MySQL são reportados como não suportados.
+- Colunas geradas, partições, sequences, system versioning, índices de expressão/fulltext/spatial, colunas/índices invisíveis e CHECK `NOT ENFORCED` do MySQL são reportados como não suportados.
 
 ## 🧪 Testes
 

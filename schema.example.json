@@ -21,7 +21,7 @@
         "production": {
           "transport": "http",
           "url": "https://example.com/rush-schema-agent.php",
-          "database": "/home/example/domains/example.com/database.sqlite",
+          "database": "app",
           "token_file": ".rush/schema/tokens/production",
           "secure": true
         }

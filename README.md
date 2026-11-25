@@ -94,17 +94,57 @@ Transports:
 rush schema agent:export -p public/rush-schema-agent.php
 ```
 
-Create `agent.config.json` next to the agent (or point
-`RUSH_SCHEMA_AGENT_CONFIG` to it):
+Create `schema.remote.json` outside the webroot (see
+[`resources/remote/schema.remote.example.json`](resources/remote/schema.remote.example.json)) and point
+`RUSH_SCHEMA_AGENT_CONFIG` to its absolute path:
+
+```env
+RUSH_SCHEMA_AGENT_CONFIG=/srv/app/schema.remote.json
+```
 
 ```json
 {
-    "token": "change-me"
+    "format": 1,
+    "token": "change-me",
+    "databases": {
+        "app": {
+            "driver": "mysql",
+            "host": "127.0.0.1",
+            "database": "app",
+            "user": "schema",
+            "password": "secret"
+        }
+    }
 }
 ```
 
-Use the same token in `.rush/schema/tokens/<target>` and reference it with
-`token_file`.
+- File mode `0600`.
+- The token in the JSON must match `.rush/schema/tokens/<target>`.
+- Database credentials never leave the server.
+- `database` in the local HTTP target is the key in `schema.remote.json`.
+
+## 🧬 Database support
+
+Supported LTS baselines:
+
+- MySQL 8.4 LTS
+- MariaDB 10.11 LTS and 11.8 LTS
+
+Supported structure:
+
+- tables, columns, primary keys, indexes (including prefixes and DESC)
+- unique constraints, foreign keys and simple views
+- `CHECK` constraints (enforced only, MySQL/MariaDB)
+- `ON UPDATE` defaults
+- JSON same-flavor: native `json` on MySQL, `LONGTEXT` + check on MariaDB
+
+Cross-flavor pushes are blocked. Comments are not managed.
+
+Not supported yet (rejected with a clear error): SQLite CHECK constraints,
+generated columns,
+partitions, sequences, system versioning, functional/expression indexes,
+invisible columns/indexes, fulltext/spatial indexes and `CHECK ... NOT
+ENFORCED`.
 
 ## 🔐 Safety
 
@@ -113,8 +153,7 @@ Use the same token in `.rush/schema/tokens/<target>` and reference it with
   confirmation, non-interactive runs also require `--yes`.
 - `down` restores structure, not data. Backups are the data safety net.
 - Renames are currently treated as drop + add.
-- MySQL CHECK constraints, generated columns, expression/fulltext indexes,
-  triggers, routines and events are reported as unsupported.
+- Generated columns, partitions, sequences, system versioning, expression/fulltext/spatial indexes, invisible columns/indexes and MySQL `NOT ENFORCED` checks are reported as unsupported.
 
 ## 🧪 Testing
 
