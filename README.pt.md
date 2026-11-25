@@ -116,6 +116,21 @@ Use o mesmo token em `.rush/schema/tokens/<target>` e referencie em
 - CHECK constraints, colunas geradas, índices de expressão/fulltext, triggers,
   routines e events do MySQL são reportados como não suportados.
 
+## 🧪 Testes
+
+Dentro do devcontainer, o MariaDB roda localmente em `127.0.0.1` como banco efêmero:
+
+```bash
+composer test
+composer test:cover
+```
+
+`test:cover` executa `pest --coverage --min=80`. O devcontainer exporta as
+variáveis `SCHEMA_MYSQL_*` usadas pelo teste de integração, então o
+`MysqlDriver` entra no relatório de cobertura. Fora do devcontainer, suba o
+MariaDB manualmente e exporte essas variáveis, ou aceite a cobertura sem MySQL
+(o driver aparecerá com 0%).
+
 ## 🤝 Contribuições
 
 Contribuições são bem-vindas. Abra uma issue ou envie um pull request.

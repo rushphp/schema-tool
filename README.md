@@ -116,6 +116,21 @@ Use the same token in `.rush/schema/tokens/<target>` and reference it with
 - MySQL CHECK constraints, generated columns, expression/fulltext indexes,
   triggers, routines and events are reported as unsupported.
 
+## 🧪 Testing
+
+Inside the devcontainer, MariaDB runs locally on `127.0.0.1` as an ephemeral database:
+
+```bash
+composer test
+composer test:cover
+```
+
+`test:cover` runs `pest --coverage --min=80`. The devcontainer exports the
+`SCHEMA_MYSQL_*` variables used by the MySQL integration test, so
+`MysqlDriver` is included in the coverage report. Outside the devcontainer,
+either start MariaDB manually and export those variables or skip the MySQL
+coverage (the driver will show 0%).
+
 ## 🤝 Contributions
 
 Contributions are welcome. Open an issue or submit a pull request.
