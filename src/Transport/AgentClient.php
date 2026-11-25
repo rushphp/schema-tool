@@ -23,10 +23,13 @@ final class AgentClient implements AgentTransportInterface
      */
     public function request(string $action, string $sql = ''): array
     {
-        $payload = [
-            'action' => $action,
-            'connection' => $this->connection(),
-        ];
+        $payload = ['action' => $action];
+
+        if ($this->target->isSsh()) {
+            $payload['connection'] = $this->connection();
+        } else {
+            $payload['database'] = $this->target->database;
+        }
 
         if ($sql !== '') {
             $payload['sql'] = $sql;

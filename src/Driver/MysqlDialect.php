@@ -167,6 +167,10 @@ final class MysqlDialect implements SqlDialectInterface
             $lines[] = '  '. $this->foreignKey($foreignKey);
         }
 
+        foreach ($table->checks as $check) {
+            $lines[] = '  CONSTRAINT '. $this->name($check->name) .' CHECK '. $this->checkExpression($check->expression);
+        }
+
         $engine = $table->options['engine'] ?? 'InnoDB';
         $collation = $table->options['collation'] ?? null;
         $options = 'ENGINE='. (is_string($engine) ? $engine : 'InnoDB');
@@ -192,7 +196,11 @@ final class MysqlDialect implements SqlDialectInterface
         }
 
         if ($column->default !== null) {
-            $definition .= ' DEFAULT '. $column->default;
+            $definition .= ' DEFAULT '. ($column->defaultExpression ? '('. $column->default .')' : $column->default);
+        }
+
+        if ($column->onUpdate !== null) {
+            $definition .= ' ON UPDATE '. $column->onUpdate;
         }
 
         if ($column->autoIncrement) {
@@ -227,7 +235,7 @@ final class MysqlDialect implements SqlDialectInterface
 
         return 'CREATE '. $unique .'INDEX '. $this->name($index->name)
             .' ON '. $this->name($table->name)
-            .' ('. $this->columns($index->columns) .')';
+            .' ('. $this->indexColumns($index) .')';
     }
 
 
@@ -305,6 +313,45 @@ final class MysqlDialect implements SqlDialectInterface
     private function columns(array $columns): string
     {
         return implode(', ', array_map($this->name(...), $columns));
+    }
+
+
+    private function indexColumns(Index $index): string
+    {
+        $parts = [];
+
+        foreach ($index->columns as $position => $column) {
+            $part = $this->name($column);
+            $length = $index->lengths[$position] ?? null;
+
+            if (is_int($length) && $length > 0) {
+                $part .= '('. $length .')';
+            }
+
+            if (($index->directions[$position] ?? 'ASC') === 'DESC') {
+                $part .= ' DESC';
+            }
+
+            $parts[] = $part;
+        }
+
+        return implode(', ', $parts);
+    }
+
+
+    private function checkExpression(string $expression): string
+    {
+        $expression = trim($expression);
+
+        if ($expression === '') {
+            return '(1)';
+        }
+
+        if (str_starts_with($expression, '(')) {
+            return $expression;
+        }
+
+        return '('. $expression .')';
     }
 
 

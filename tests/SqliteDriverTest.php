@@ -78,3 +78,12 @@ SQL);
     expect((new SqliteDriver())->unsupportedObjects($pdo))
         ->toBe(['trigger trg_users_audit']);
 });
+
+
+test('detects sqlite check constraints as unsupported', function () {
+    $path = sys_get_temp_dir() .'/schema-check-'. bin2hex(random_bytes(6)) .'.sqlite';
+    $pdo = SchemaFixtures::sqlite($path, 'CREATE TABLE users (id INTEGER PRIMARY KEY, score INTEGER, CHECK (score >= 0))');
+
+    expect((new SqliteDriver())->unsupportedObjects($pdo))
+        ->toBe(['check constraint users']);
+});

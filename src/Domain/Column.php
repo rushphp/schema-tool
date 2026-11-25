@@ -12,6 +12,8 @@ final class Column
         public readonly ?string $default,
         public readonly int $position,
         public readonly bool $autoIncrement,
+        public readonly ?string $onUpdate = null,
+        public readonly bool $defaultExpression = false,
     ) {
     }
 
@@ -19,6 +21,8 @@ final class Column
     /** @param array<string, mixed> $data */
     public static function fromArray(string $name, array $data): self
     {
+        $onUpdate = $data['onUpdate'] ?? null;
+
         return new self(
             $name,
             is_string($data['type'] ?? null) ? $data['type'] : '',
@@ -26,6 +30,8 @@ final class Column
             is_string($data['default'] ?? null) ? $data['default'] : null,
             is_int($data['position'] ?? null) ? $data['position'] : 0,
             (bool) ($data['autoIncrement'] ?? false),
+            is_string($onUpdate) && $onUpdate !== '' ? $onUpdate : null,
+            (bool) ($data['defaultExpression'] ?? false),
         );
     }
 
@@ -39,6 +45,8 @@ final class Column
             'default' => $this->default,
             'position' => $this->position,
             'autoIncrement' => $this->autoIncrement,
+            'onUpdate' => $this->onUpdate,
+            'defaultExpression' => $this->defaultExpression,
         ];
     }
 }

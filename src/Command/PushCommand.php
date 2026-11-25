@@ -8,6 +8,7 @@ use Rush\Contract\Option;
 use Rush\Contract\OutputInterface;
 use Rush\Tool\Schema\Canonical\SchemaHasher;
 use Rush\Tool\Schema\Diff\SchemaDiff;
+use Rush\Tool\Schema\Domain\SchemaState;
 use Rush\Tool\Schema\Exception\TraceException;
 use Rush\Tool\Schema\Trace\Save;
 use Rush\Tool\Schema\Trace\TraceRepository;
@@ -51,7 +52,15 @@ final class PushCommand extends CommandAbstract
 
         $targetConfig = $database->target($targetName);
         $session = $this->session($database, $targetConfig, true, true);
+        $localSession = $this->session($database, $database->local(), true);
         $driver = $this->driver($database);
+
+        if ($localSession->flavor() !== $session->flavor()) {
+            throw new TraceException(
+                "schema: cross-flavor push is not supported (local {$localSession->flavor()}, target {$session->flavor()})",
+            );
+        }
+
         $targetState = $session->inspect();
         $targetHash = (new SchemaHasher())->hash($targetState);
 
@@ -81,6 +90,7 @@ final class PushCommand extends CommandAbstract
         }
 
         $desired = $trace->state($checkpoint->schemaHash);
+        $this->assertCapabilities($desired, $session->capabilities());
         $diff = SchemaDiff::between($targetState, $desired);
 
         if ($diff->isEmpty()) {
@@ -113,6 +123,8 @@ final class PushCommand extends CommandAbstract
             'target' => $targetName,
             'transport' => $targetConfig->transport,
             'driver' => $database->driver,
+            'flavor' => $session->flavor(),
+            'version' => $session->version(),
             'checkpoint' => $checkpoint->id,
             'save' => $checkpoint->save,
             'schemaHash' => $after,
@@ -128,6 +140,49 @@ final class PushCommand extends CommandAbstract
         $this->out($output, $database, 'backup: '. $backup);
 
         return ExitCode::Success->value;
+    }
+
+
+    /** @param array<string, bool> $capabilities */
+    private function assertCapabilities(SchemaState $state, array $capabilities): void
+    {
+        $required = [];
+
+        foreach ($state->tables as $table) {
+            if ($table->checks !== []) {
+                $required['check_constraints'] = 'CHECK constraints';
+            }
+
+            foreach ($table->indexes as $index) {
+                if (array_filter($index->lengths, static fn (mixed $length): bool => is_int($length) && $length > 0) !== []) {
+                    $required['prefix_indexes'] = 'index prefixes';
+                }
+
+                if (in_array('DESC', $index->directions, true)) {
+                    $required['desc_indexes'] = 'descending indexes';
+                }
+            }
+
+            foreach ($table->columns as $column) {
+                if ($column->onUpdate !== null) {
+                    $required['on_update'] = 'ON UPDATE defaults';
+                }
+
+                if (strtolower($column->type) === 'json') {
+                    $required['json_type'] = 'native JSON columns';
+                }
+
+                if ($column->defaultExpression && strtolower($column->type) === 'json') {
+                    $required['json_expression_default'] = 'JSON expression defaults';
+                }
+            }
+        }
+
+        foreach ($required as $feature => $label) {
+            if (($capabilities[$feature] ?? false) !== true) {
+                throw new TraceException("schema: target does not support {$label}");
+            }
+        }
     }
 
 

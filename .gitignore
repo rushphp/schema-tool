@@ -1,5 +1,6 @@
 # Local RUSH state
 .rush/
+schema.remote.json
 
 # Composer
 /vendor/

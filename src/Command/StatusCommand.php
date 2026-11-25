@@ -137,6 +137,8 @@ final class StatusCommand extends CommandAbstract
             'target' => $target,
             'transport' => $targetConfig->transport,
             'driver' => $database->driver,
+            'flavor' => $session->flavor(),
+            'version' => $session->version(),
             'schemaHash' => $hash,
             'checkpoint' => $latest->id,
             'checkpointHash' => $latest->schemaHash,
@@ -152,6 +154,7 @@ final class StatusCommand extends CommandAbstract
             $output->line($this->json($data));
         } else {
             $this->out($output, $database, 'target: '. $target .' ('. $targetConfig->transport .')');
+            $this->out($output, $database, 'server: '. $session->flavor() .' '. $session->version());
             $this->out($output, $database, 'schemaHash: '. $hash);
             $this->out($output, $database, 'checkpoint: '. $latest->id);
             $this->out($output, $database, 'relation: '. $relation);

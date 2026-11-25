@@ -1,0 +1,18 @@
+{
+    "format": 1,
+    "token": "change-me",
+    "databases": {
+        "app": {
+            "driver": "sqlite",
+            "path": "/home/example/domains/example.com/database.sqlite"
+        },
+        "analytics": {
+            "driver": "mysql",
+            "host": "127.0.0.1",
+            "port": 3306,
+            "database": "analytics",
+            "user": "schema",
+            "password": "secret"
+        }
+    }
+}

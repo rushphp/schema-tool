@@ -152,3 +152,19 @@ test('http transport requires https when secure is true', function () {
     expect(fn () => Config::load($root))
         ->toThrow(RuntimeException::class, 'requires an https url');
 });
+
+
+test('http transport rejects database credentials in local config', function () {
+    $data = SchemaFixtures::config();
+    $data['databases']['default']['targets']['prod'] = [
+        'transport' => 'http',
+        'url' => 'https://example.com/agent.php',
+        'database' => 'app',
+        'token_file' => '.rush/schema/tokens/prod',
+        'host' => '127.0.0.1',
+    ];
+    $root = schemaConfigFile($data);
+
+    expect(fn () => Config::load($root))
+        ->toThrow(RuntimeException::class, "must not define 'host'");
+});

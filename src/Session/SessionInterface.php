@@ -11,6 +11,11 @@ interface SessionInterface
 
     public function version(): string;
 
+    public function flavor(): string;
+
+    /** @return array<string, bool> */
+    public function capabilities(): array;
+
     /** @return list<string> */
     public function unsupportedObjects(): array;
 

@@ -43,14 +43,27 @@ final class SqliteDriver implements DriverInterface
     /** @return list<string> */
     public function unsupportedObjects(PDO $pdo): array
     {
-        $rows = self::rows(
-            $pdo,
-            "SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
-        );
-
         $objects = [];
 
-        foreach ($rows as $row) {
+        foreach (self::rows($pdo, "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL ORDER BY name") as $row) {
+            $name = self::string($row, 'name');
+            $sql = self::string($row, 'sql');
+
+            if ($name !== '' && preg_match('/\bCHECK\s*\(/i', $sql) === 1) {
+                $objects[] = 'check constraint '. $name;
+            }
+
+            if ($name !== '') {
+                foreach (self::rows($pdo, 'PRAGMA table_xinfo('. $pdo->quote($name) .')') as $column) {
+                    if (self::int($column, 'hidden') !== 0) {
+                        $columnName = self::string($column, 'name');
+                        $objects[] = 'generated column '. $name .'.'. $columnName;
+                    }
+                }
+            }
+        }
+
+        foreach (self::rows($pdo, "SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name") as $row) {
             $name = self::string($row, 'name');
 
             if ($name !== '') {
@@ -58,7 +71,9 @@ final class SqliteDriver implements DriverInterface
             }
         }
 
-        return $objects;
+        sort($objects, SORT_STRING);
+
+        return array_values(array_unique($objects));
     }
 
 

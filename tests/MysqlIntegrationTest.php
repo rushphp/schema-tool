@@ -7,6 +7,7 @@ use Rush\Tool\Schema\Command\RegressCommand;
 use Rush\Tool\Schema\Command\SaveCommand;
 use Rush\Tool\Schema\Command\StatusCommand;
 use Rush\Tool\Schema\Command\VerifyCommand;
+use Rush\Tool\Schema\Exception\UnsupportedObjectsException;
 use Tests\SchemaFixtures;
 
 
@@ -37,6 +38,8 @@ function mysqlWorkspace(array $env): array
         [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION],
     );
     $server->exec('CREATE DATABASE `'. $database .'`');
+    $version = (string) $server->query('SELECT VERSION()')?->fetchColumn();
+    $flavor = stripos($version, 'mariadb') !== false ? 'mariadb' : 'mysql';
     $pdo = new PDO(
         'mysql:host='. $env['host'] .';port='. $env['port'] .';dbname='. $database .';charset=utf8mb4',
         $env['user'],
@@ -64,11 +67,26 @@ function mysqlWorkspace(array $env): array
         ],
     ], JSON_THROW_ON_ERROR));
 
-    return ['root' => $root, 'server' => $server, 'database' => $database, 'pdo' => $pdo];
+    return [
+        'root' => $root,
+        'server' => $server,
+        'database' => $database,
+        'pdo' => $pdo,
+        'flavor' => $flavor,
+        'version' => $version,
+    ];
 }
 
 
-test('mysql workflow init, save, checkpoint, regress and verify', function () {
+function mysqlSkipUnlessFlavor(array $workspace, string $flavor): void
+{
+    if ($workspace['flavor'] !== $flavor) {
+        test()->markTestSkipped('requires '. $flavor);
+    }
+}
+
+
+test('mysql/mariadb workflow init, save, checkpoint, regress and verify', function () {
     $env = mysqlEnvironment();
 
     if ($env === null) {
@@ -80,7 +98,7 @@ test('mysql workflow init, save, checkpoint, regress and verify', function () {
     try {
         $root = $workspace['root'];
         $pdo = $workspace['pdo'];
-        $pdo->exec('CREATE TABLE users (id INT NOT NULL AUTO_INCREMENT, email VARCHAR(255) NOT NULL, PRIMARY KEY (id), UNIQUE KEY uq_users_email (email)) ENGINE=InnoDB');
+        $pdo->exec('CREATE TABLE users (id INT NOT NULL AUTO_INCREMENT, email VARCHAR(255) NOT NULL, PRIMARY KEY (id), UNIQUE KEY uq_users_email (email), CONSTRAINT chk_users_email CHECK (email <> \'\')) ENGINE=InnoDB');
 
         $init = SchemaFixtures::run(new InitCommand($root));
         expect($init['code'])->toBe(ExitCode::Success->value);
@@ -108,6 +126,84 @@ test('mysql workflow init, save, checkpoint, regress and verify', function () {
 
         $verify = SchemaFixtures::run(new VerifyCommand($root));
         expect($verify['code'])->toBe(ExitCode::Success->value);
+    } finally {
+        $workspace['server']->exec('DROP DATABASE IF EXISTS `'. $workspace['database'] .'`');
+    }
+});
+
+
+test('mariadb json is captured as longtext plus check', function () {
+    $env = mysqlEnvironment();
+
+    if ($env === null) {
+        $this->markTestSkipped('SCHEMA_MYSQL_HOST is not set');
+    }
+
+    $workspace = mysqlWorkspace($env);
+    mysqlSkipUnlessFlavor($workspace, 'mariadb');
+
+    try {
+        $workspace['pdo']->exec('CREATE TABLE events (id INT NOT NULL AUTO_INCREMENT, payload JSON, PRIMARY KEY (id)) ENGINE=InnoDB');
+        $init = SchemaFixtures::run(new InitCommand($workspace['root']));
+        expect($init['code'])->toBe(ExitCode::Success->value);
+
+        $state = SchemaFixtures::trace($workspace['root'])->chain()[0];
+        $table = SchemaFixtures::trace($workspace['root'])->state($state->toHash)->tables['events'];
+
+        expect(strtolower($table->columns['payload']->type))->toContain('longtext')
+            ->and($table->checks)->not->toBeEmpty();
+
+        $verify = SchemaFixtures::run(new VerifyCommand($workspace['root']));
+        expect($verify['code'])->toBe(ExitCode::Success->value);
+    } finally {
+        $workspace['server']->exec('DROP DATABASE IF EXISTS `'. $workspace['database'] .'`');
+    }
+});
+
+
+test('mysql json is captured as native json', function () {
+    $env = mysqlEnvironment();
+
+    if ($env === null) {
+        $this->markTestSkipped('SCHEMA_MYSQL_HOST is not set');
+    }
+
+    $workspace = mysqlWorkspace($env);
+    mysqlSkipUnlessFlavor($workspace, 'mysql');
+
+    try {
+        $workspace['pdo']->exec('CREATE TABLE events (id INT NOT NULL AUTO_INCREMENT, payload JSON, PRIMARY KEY (id)) ENGINE=InnoDB');
+        $init = SchemaFixtures::run(new InitCommand($workspace['root']));
+        expect($init['code'])->toBe(ExitCode::Success->value);
+
+        $state = SchemaFixtures::trace($workspace['root'])->chain()[0];
+        $table = SchemaFixtures::trace($workspace['root'])->state($state->toHash)->tables['events'];
+
+        expect(strtolower($table->columns['payload']->type))->toBe('json');
+
+        $verify = SchemaFixtures::run(new VerifyCommand($workspace['root']));
+        expect($verify['code'])->toBe(ExitCode::Success->value);
+    } finally {
+        $workspace['server']->exec('DROP DATABASE IF EXISTS `'. $workspace['database'] .'`');
+    }
+});
+
+
+test('mysql rejects not enforced checks', function () {
+    $env = mysqlEnvironment();
+
+    if ($env === null) {
+        $this->markTestSkipped('SCHEMA_MYSQL_HOST is not set');
+    }
+
+    $workspace = mysqlWorkspace($env);
+    mysqlSkipUnlessFlavor($workspace, 'mysql');
+
+    try {
+        $workspace['pdo']->exec('CREATE TABLE users (id INT NOT NULL PRIMARY KEY, score INT, CONSTRAINT chk_score CHECK (score >= 0) NOT ENFORCED) ENGINE=InnoDB');
+
+        expect(fn () => SchemaFixtures::run(new InitCommand($workspace['root'])))
+            ->toThrow(UnsupportedObjectsException::class, 'not enforced check');
     } finally {
         $workspace['server']->exec('DROP DATABASE IF EXISTS `'. $workspace['database'] .'`');
     }

@@ -232,13 +232,12 @@ final class Config
             throw new ConfigException("schema: target '{$name}' requires an https url when secure is true");
         }
 
-        $host = self::optionalString($target, 'host');
-        $port = self::optionalInt($target, 'port', 3306);
-        $user = self::optionalString($target, 'user');
-        $password = self::optionalString($target, 'password');
-
-        if ($driver === 'mysql' && ($host === null || $user === null)) {
-            throw new ConfigException("schema: target '{$name}' requires 'host' and 'user'");
+        foreach (['host', 'port', 'user', 'password', 'ssh'] as $key) {
+            if (array_key_exists($key, $target)) {
+                throw new ConfigException(
+                    "schema: target '{$name}' must not define '{$key}'; http targets use schema.remote.json on the server",
+                );
+            }
         }
 
         return new TargetConfig(
@@ -246,10 +245,10 @@ final class Config
             'http',
             $database,
             $driver,
-            $host,
-            $port,
-            $user,
-            $password,
+            null,
+            null,
+            null,
+            null,
             $secure,
             $url,
             self::requiredString($target, 'token_file'),

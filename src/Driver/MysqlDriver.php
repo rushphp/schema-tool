@@ -3,6 +3,7 @@
 namespace Rush\Tool\Schema\Driver;
 
 use PDO;
+use Rush\Tool\Schema\Domain\Check;
 use Rush\Tool\Schema\Domain\Column;
 use Rush\Tool\Schema\Domain\ForeignKey;
 use Rush\Tool\Schema\Domain\Index;
@@ -34,22 +35,34 @@ final class MysqlDriver implements DriverInterface
     }
 
 
+    public function capabilities(PDO $pdo): MysqlCapabilities
+    {
+        return MysqlCapabilities::fromVersion($this->version($pdo));
+    }
+
+
     /** @return list<string> */
     public function unsupportedObjects(PDO $pdo): array
     {
-        $objects = [];
-
         $queries = [
             'trigger' => "SELECT TRIGGER_NAME AS name FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE()",
             'procedure' => "SELECT ROUTINE_NAME AS name FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_TYPE = 'PROCEDURE'",
             'function' => "SELECT ROUTINE_NAME AS name FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_TYPE = 'FUNCTION'",
             'event' => "SELECT EVENT_NAME AS name FROM information_schema.EVENTS WHERE EVENT_SCHEMA = DATABASE()",
             'generated column' => "SELECT CONCAT(TABLE_NAME, '.', COLUMN_NAME) AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND EXTRA LIKE '%GENERATED%'",
-            'check constraint' => "SELECT CONSTRAINT_NAME AS name FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE()",
             'expression index' => "SELECT DISTINCT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND EXPRESSION IS NOT NULL",
             'fulltext index' => "SELECT DISTINCT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_TYPE = 'FULLTEXT'",
             'spatial index' => "SELECT DISTINCT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_TYPE = 'SPATIAL'",
+            'partitioned table' => "SELECT DISTINCT TABLE_NAME AS name FROM information_schema.PARTITIONS WHERE TABLE_SCHEMA = DATABASE() AND PARTITION_NAME IS NOT NULL",
+            'system versioned table' => "SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND CREATE_OPTIONS LIKE '%SYSTEM VERSIONING%'",
+            'sequence' => "SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'SEQUENCE'",
+            'not enforced check' => "SELECT CONSTRAINT_NAME AS name FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = DATABASE() AND CONSTRAINT_TYPE = 'CHECK' AND ENFORCED = 'NO'",
+            'invisible column' => "SELECT CONCAT(TABLE_NAME, '.', COLUMN_NAME) AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND EXTRA LIKE '%INVISIBLE%'",
+            'invisible index' => "SELECT DISTINCT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND IS_VISIBLE = 'NO'",
+            'ignored index' => "SELECT DISTINCT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND IGNORED = 'YES'",
         ];
+
+        $objects = [];
 
         foreach ($queries as $type => $sql) {
             try {
@@ -168,13 +181,17 @@ final class MysqlDriver implements DriverInterface
 
             $type = $this->string($row, 'type');
             $extra = strtolower($this->string($row, 'extra'));
+            $default = $this->defaultValue($row, $type, $extra);
+            $defaultExpression = $this->isExpressionDefault($default, $extra);
             $columns[$columnName] = new Column(
                 $columnName,
                 $type,
                 strtoupper($this->string($row, 'nullable')) === 'YES',
-                $this->defaultValue($row, $type, $extra),
+                $default,
                 $this->int($row, 'position'),
                 str_contains($extra, 'auto_increment'),
+                $this->onUpdate($extra),
+                $defaultExpression,
             );
 
             if (strtoupper($this->string($row, 'column_key')) === 'PRI') {
@@ -191,6 +208,7 @@ final class MysqlDriver implements DriverInterface
             $this->indexes($pdo, $name, $foreignKeyNames),
             $this->foreignKeys($pdo, $name),
             $options,
+            $this->checks($pdo, $name),
         );
     }
 
@@ -205,7 +223,8 @@ final class MysqlDriver implements DriverInterface
 
         foreach ($this->rows(
             $pdo,
-            'SELECT INDEX_NAME AS name, NON_UNIQUE AS non_unique, SEQ_IN_INDEX AS seq, COLUMN_NAME AS column_name
+            'SELECT INDEX_NAME AS name, NON_UNIQUE AS non_unique, SEQ_IN_INDEX AS seq, COLUMN_NAME AS column_name,
+                    SUB_PART AS sub_part, COLLATION AS collation
              FROM information_schema.STATISTICS
              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
              ORDER BY INDEX_NAME, SEQ_IN_INDEX',
@@ -224,13 +243,20 @@ final class MysqlDriver implements DriverInterface
 
         foreach ($grouped as $name => $rows) {
             $columns = [];
+            $lengths = [];
+            $directions = [];
 
             foreach ($rows as $row) {
                 $column = $this->string($row, 'column_name');
 
-                if ($column !== '') {
-                    $columns[] = $column;
+                if ($column === '') {
+                    continue;
                 }
+
+                $columns[] = $column;
+                $length = $row['sub_part'] ?? null;
+                $lengths[] = is_int($length) ? $length : (is_numeric($length) ? (int) $length : null);
+                $directions[] = strtoupper($this->string($row, 'collation')) === 'D' ? 'DESC' : 'ASC';
             }
 
             $first = $rows[0];
@@ -241,12 +267,44 @@ final class MysqlDriver implements DriverInterface
                 'explicit',
                 false,
                 null,
+                $lengths,
+                $directions,
             );
         }
 
         ksort($indexes, SORT_STRING);
 
         return $indexes;
+    }
+
+
+    /** @return array<string, Check> */
+    private function checks(PDO $pdo, string $table): array
+    {
+        $checks = [];
+
+        foreach ($this->rows(
+            $pdo,
+            'SELECT cc.CONSTRAINT_NAME AS name, cc.CHECK_CLAUSE AS expression
+             FROM information_schema.CHECK_CONSTRAINTS cc
+             INNER JOIN information_schema.TABLE_CONSTRAINTS tc
+                 ON tc.CONSTRAINT_SCHEMA = cc.CONSTRAINT_SCHEMA AND tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
+             WHERE cc.CONSTRAINT_SCHEMA = DATABASE() AND tc.TABLE_NAME = ?
+             ORDER BY cc.CONSTRAINT_NAME',
+            [$table],
+        ) as $row) {
+            $name = $this->string($row, 'name');
+
+            if ($name === '') {
+                continue;
+            }
+
+            $checks[$name] = new Check($name, self::normalizeExpression($this->string($row, 'expression')));
+        }
+
+        ksort($checks, SORT_STRING);
+
+        return $checks;
     }
 
 
@@ -357,6 +415,39 @@ final class MysqlDriver implements DriverInterface
         }
 
         return "'". str_replace("'", "''", $default) ."'";
+    }
+
+
+    private function isExpressionDefault(?string $default, string $extra): bool
+    {
+        if ($default === null || ! str_contains($extra, 'default_generated')) {
+            return false;
+        }
+
+        if (str_starts_with(trim($default), '(')) {
+            return false;
+        }
+
+        return preg_match('/\ACURRENT_(TIMESTAMP|DATE|TIME)/i', trim($default)) !== 1;
+    }
+
+
+    private function onUpdate(string $extra): ?string
+    {
+        if (preg_match('/\bon update (.+)$/i', $extra, $matches) !== 1) {
+            return null;
+        }
+
+        return trim($matches[1]);
+    }
+
+
+    public static function normalizeExpression(string $expression): string
+    {
+        $expression = str_replace(["\\'", '\\"'], ["'", '"'], $expression);
+        $expression = str_replace(["\r\n", "\r"], "\n", $expression);
+
+        return trim(preg_replace('/\s+/', ' ', $expression) ?? $expression);
     }
 
 

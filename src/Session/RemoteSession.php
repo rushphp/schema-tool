@@ -40,6 +40,35 @@ final class RemoteSession implements SessionInterface
     }
 
 
+    public function flavor(): string
+    {
+        $flavor = $this->inspectResponse()['flavor'] ?? null;
+
+        return is_string($flavor) ? $flavor : '';
+    }
+
+
+    /** @return array<string, bool> */
+    public function capabilities(): array
+    {
+        $capabilities = $this->inspectResponse()['capabilities'] ?? null;
+
+        if (!is_array($capabilities)) {
+            return [];
+        }
+
+        $result = [];
+
+        foreach ($capabilities as $key => $value) {
+            if (is_string($key) && is_bool($value)) {
+                $result[$key] = $value;
+            }
+        }
+
+        return $result;
+    }
+
+
     /** @return list<string> */
     public function unsupportedObjects(): array
     {

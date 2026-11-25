@@ -40,7 +40,9 @@ final class TargetsCommand extends CommandAbstract
                 $checkpoint = $record['checkpoint'] ?? null;
                 $verifiedAt = $record['verifiedAt'] ?? null;
                 $extra = ' last='. (is_string($checkpoint) ? $checkpoint : '-')
-                    .' at='. (is_string($verifiedAt) ? $verifiedAt : '-');
+                    .' at='. (is_string($verifiedAt) ? $verifiedAt : '-')
+                    .' flavor='. (is_string($record['flavor'] ?? null) ? $record['flavor'] : '-')
+                    .' version='. (is_string($record['version'] ?? null) ? $record['version'] : '-');
             }
 
             $this->out(

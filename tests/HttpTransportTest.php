@@ -25,13 +25,22 @@ test('http transport checks status and pushes a sqlite target', function () {
     $docroot = $root .'/public';
     mkdir($docroot, 0755, true);
     file_put_contents($docroot .'/agent.php', AgentBundler::build(null, true));
-    file_put_contents($docroot .'/agent.config.json', json_encode(['token' => 'test-token'], JSON_THROW_ON_ERROR));
+    $remoteConfig = $root .'/schema.remote.json';
+    file_put_contents($remoteConfig, json_encode([
+        'format' => 1,
+        'token' => 'test-token',
+        'databases' => [
+            'app' => ['driver' => 'sqlite', 'path' => $targetDatabase],
+        ],
+    ], JSON_THROW_ON_ERROR));
 
     $port = random_int(20000, 40000);
     $process = proc_open(
         [PHP_BINARY, '-S', '127.0.0.1:'. $port, '-t', $docroot],
         [0 => ['pipe', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
         $pipes,
+        null,
+        array_merge(getenv(), ['RUSH_SCHEMA_AGENT_CONFIG' => $remoteConfig]),
     );
 
     expect(is_resource($process))->toBeTrue();
@@ -65,7 +74,7 @@ test('http transport checks status and pushes a sqlite target', function () {
         $config['databases']['default']['targets']['production'] = [
             'transport' => 'http',
             'url' => 'http://127.0.0.1:'. $port .'/agent.php',
-            'database' => $targetDatabase,
+            'database' => 'app',
             'token_file' => '.rush/schema/tokens-production',
             'secure' => false,
         ];

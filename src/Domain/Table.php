@@ -13,6 +13,7 @@ final class Table
      * @param array<string, Index> $indexes
      * @param array<string, ForeignKey> $foreignKeys
      * @param array<string, mixed> $options
+     * @param array<string, Check> $checks
      */
     public function __construct(
         public readonly string $name,
@@ -21,6 +22,7 @@ final class Table
         public readonly array $indexes,
         public readonly array $foreignKeys,
         public readonly array $options = [],
+        public readonly array $checks = [],
     ) {
     }
 
@@ -55,6 +57,15 @@ final class Table
             }
         }
 
+        $checks = [];
+
+        foreach (self::map($data['checks'] ?? null) as $key => $check) {
+            if (is_string($key) && is_array($check)) {
+                /** @var array<string, mixed> $check */
+                $checks[$key] = Check::fromArray($key, $check);
+            }
+        }
+
         return new self(
             $name,
             $columns,
@@ -62,6 +73,7 @@ final class Table
             $indexes,
             $foreignKeys,
             self::map($data['options'] ?? null),
+            $checks,
         );
     }
 
@@ -101,12 +113,19 @@ final class Table
             $foreignKeys[$name] = $foreignKey->toArray();
         }
 
+        $checks = [];
+
+        foreach ($this->checks as $name => $check) {
+            $checks[$name] = $check->toArray();
+        }
+
         return [
             'columns' => $columns === [] ? new stdClass() : $columns,
             'primaryKey' => $this->primaryKey,
             'indexes' => $indexes === [] ? new stdClass() : $indexes,
             'foreignKeys' => $foreignKeys === [] ? new stdClass() : $foreignKeys,
             'options' => $this->options === [] ? new stdClass() : $this->options,
+            'checks' => $checks === [] ? new stdClass() : $checks,
         ];
     }
 

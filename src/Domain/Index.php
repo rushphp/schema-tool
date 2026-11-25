@@ -7,6 +7,8 @@ final class Index
 {
     /**
      * @param list<string> $columns
+     * @param list<int|null> $lengths
+     * @param list<string> $directions
      */
     public function __construct(
         public readonly string $name,
@@ -15,6 +17,8 @@ final class Index
         public readonly string $source,
         public readonly bool $partial,
         public readonly ?string $sql = null,
+        public readonly array $lengths = [],
+        public readonly array $directions = [],
     ) {
     }
 
@@ -23,10 +27,28 @@ final class Index
     public static function fromArray(string $key, array $data): self
     {
         $columns = [];
+        $rawLengths = is_array($data['lengths'] ?? null) ? $data['lengths'] : [];
+        $rawDirections = is_array($data['directions'] ?? null) ? $data['directions'] : [];
+        $hasLengths = $rawLengths !== [];
+        $hasDirections = $rawDirections !== [];
+        $lengths = [];
+        $directions = [];
 
-        foreach (is_array($data['columns'] ?? null) ? $data['columns'] : [] as $column) {
-            if (is_string($column)) {
-                $columns[] = $column;
+        foreach (is_array($data['columns'] ?? null) ? $data['columns'] : [] as $position => $column) {
+            if ( ! is_string($column)) {
+                continue;
+            }
+
+            $columns[] = $column;
+
+            if ($hasLengths) {
+                $length = $rawLengths[$position] ?? null;
+                $lengths[] = is_int($length) ? $length : null;
+            }
+
+            if ($hasDirections) {
+                $direction = $rawDirections[$position] ?? 'ASC';
+                $directions[] = is_string($direction) ? strtoupper($direction) : 'ASC';
             }
         }
 
@@ -37,6 +59,8 @@ final class Index
             is_string($data['source'] ?? null) ? $data['source'] : 'explicit',
             (bool) ($data['partial'] ?? false),
             is_string($data['sql'] ?? null) ? $data['sql'] : null,
+            $lengths,
+            $directions,
         );
     }
 
@@ -51,6 +75,8 @@ final class Index
             'source' => $this->source,
             'partial' => $this->partial,
             'sql' => $this->sql,
+            'lengths' => $this->lengths,
+            'directions' => $this->directions,
         ];
     }
 }

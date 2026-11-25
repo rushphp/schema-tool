@@ -10,6 +10,7 @@ use Rush\Tool\Schema\Canonical\SchemaHasher;
 use Rush\Tool\Schema\CheckpointService;
 use Rush\Tool\Schema\CheckpointVerifier;
 use Rush\Tool\Schema\Diff\SchemaDiff;
+use Rush\Tool\Schema\Exception\UnsupportedObjectsException;
 use Rush\Tool\Schema\Exception\TraceException;
 use Rush\Tool\Schema\Trace\Save;
 use Rush\Tool\Schema\Ulid;
@@ -45,6 +46,12 @@ final class SaveCommand extends CommandAbstract
 
         $session = $this->session($database, $this->localTarget($database), true);
         $driver = $this->driver($database);
+        $unsupported = $session->unsupportedObjects();
+
+        if ($unsupported !== []) {
+            throw UnsupportedObjectsException::fromObjects($unsupported);
+        }
+
         $state = $session->inspect();
         $hash = (new SchemaHasher())->hash($state);
         $head = $trace->requireSave((string) $trace->head());

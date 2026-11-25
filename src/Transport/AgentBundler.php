@@ -28,7 +28,9 @@ final class AgentBundler
         'Driver/SqliteDialect.php',
         'Driver/MysqlDriver.php',
         'Driver/MysqlDialect.php',
+        'Driver/MysqlCapabilities.php',
         'Sql/SqlExecutor.php',
+        'Transport/AgentConfig.php',
     ];
 
 
@@ -80,17 +82,6 @@ final class AgentBundler
         $httpFlag = $http ? 'true' : 'false';
         $input = $http
             ? <<<'PHP'
-$configPath = getenv('RUSH_SCHEMA_AGENT_CONFIG') ?: __DIR__ .'/agent.config.json';
-$config = is_file($configPath) ? json_decode((string) file_get_contents($configPath), true) : null;
-$token = is_array($config) && is_string($config['token'] ?? null) ? $config['token'] : null;
-$header = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
-$provided = str_starts_with($header, 'Bearer ') ? substr($header, 7) : '';
-if ($token === null || $provided === '' || ! hash_equals($token, $provided)) {
-    http_response_code(403);
-    header('Content-Type: application/json');
-    echo json_encode(['ok' => false, 'error' => 'forbidden']);
-    return;
-}
 $raw = (string) file_get_contents('php://input');
 PHP
             : <<<'PHP'
@@ -106,6 +97,18 @@ namespace {
     {$payload}
 
     try {
+        if ({$httpFlag}) {
+            \$config = \Rush\Tool\Schema\Transport\AgentConfig::fromEnvironment();
+            \$header = \$_SERVER['HTTP_AUTHORIZATION'] ?? '';
+            \$provided = str_starts_with(\$header, 'Bearer ') ? substr(\$header, 7) : '';
+            if (\$provided === '' || ! hash_equals(\$config->token(), \$provided)) {
+                http_response_code(403);
+                header('Content-Type: application/json');
+                echo json_encode(['ok' => false, 'error' => 'forbidden']);
+                return;
+            }
+        }
+
         if (!is_string(\$raw) || trim(\$raw) === '') {
             throw new \RuntimeException('missing payload');
         }
@@ -113,10 +116,26 @@ namespace {
         if (!is_array(\$payload)) {
             throw new \RuntimeException('payload must be an object');
         }
-        \$connection = \$payload['connection'] ?? null;
-        if (!is_array(\$connection)) {
-            throw new \RuntimeException('missing connection');
+
+        if ({$httpFlag}) {
+            if (array_key_exists('connection', \$payload)) {
+                throw new \RuntimeException('request connections are disabled');
+            }
+
+            \$databaseKey = \$payload['database'] ?? null;
+
+            if (!is_string(\$databaseKey) || \$databaseKey === '') {
+                throw new \RuntimeException('missing database');
+            }
+
+            \$connection = \$config->connection(\$databaseKey);
+        } else {
+            \$connection = \$payload['connection'] ?? null;
+            if (!is_array(\$connection)) {
+                throw new \RuntimeException('missing connection');
+            }
         }
+
         \$driverName = \$connection['driver'] ?? null;
         \$dsn = \$connection['dsn'] ?? null;
         if (!is_string(\$driverName) || !is_string(\$dsn)) {
@@ -136,9 +155,15 @@ namespace {
             \$driver = \$driverName === 'sqlite'
                 ? new \Rush\Tool\Schema\Driver\SqliteDriver()
                 : new \Rush\Tool\Schema\Driver\MysqlDriver();
+            \$version = \$driver->version(\$pdo);
+            \$capabilities = \$driverName === 'mysql'
+                ? \Rush\Tool\Schema\Driver\MysqlCapabilities::fromVersion(\$version)
+                : null;
             \$result = [
                 'ok' => true,
-                'version' => \$driver->version(\$pdo),
+                'version' => \$version,
+                'flavor' => \$capabilities?->flavor ?? \$driverName,
+                'capabilities' => \$capabilities?->all() ?? [],
                 'unsupported' => \$driver->unsupportedObjects(\$pdo),
                 'state' => \$driver->inspect(\$pdo)->toArray(),
             ];
@@ -162,16 +187,28 @@ namespace {
                 }
             } else {
                 \$destination = sys_get_temp_dir() .'/rush-schema-'. \$stamp .'.sql';
-                \$command = ['mysqldump', '--single-transaction', '--no-tablespaces', '--host='. (\$connection['host'] ?? '127.0.0.1'), '--port='. (\$connection['port'] ?? 3306), '--user='. (\$connection['user'] ?? ''), \$path];
+                \$dumpBinary = 'mysqldump';
+                \$probe = @proc_open(['mariadb-dump', '--version'], [0 => ['pipe','r'], 1 => ['pipe','w'], 2 => ['pipe','w']], \$probePipes);
+                if (is_resource(\$probe)) {
+                    fclose(\$probePipes[0]);
+                    stream_get_contents(\$probePipes[1]);
+                    stream_get_contents(\$probePipes[2]);
+                    fclose(\$probePipes[1]);
+                    fclose(\$probePipes[2]);
+                    if (proc_close(\$probe) === 0) {
+                        \$dumpBinary = 'mariadb-dump';
+                    }
+                }
+                \$command = [\$dumpBinary, '--single-transaction', '--no-tablespaces', '--host='. (\$connection['host'] ?? '127.0.0.1'), '--port='. (\$connection['port'] ?? 3306), '--user='. (\$connection['user'] ?? ''), \$path];
                 \$process = proc_open(\$command, [0 => ['pipe','r'], 1 => ['file', \$destination, 'w'], 2 => ['pipe','w']], \$pipes, null, array_merge(getenv(), ['MYSQL_PWD' => \$connection['password'] ?? '']));
                 if (!is_resource(\$process)) {
-                    throw new \RuntimeException('could not start mysqldump');
+                    throw new \RuntimeException('could not start '. \$dumpBinary);
                 }
                 fclose(\$pipes[0]);
                 stream_get_contents(\$pipes[2]);
                 fclose(\$pipes[2]);
                 if (proc_close(\$process) !== 0) {
-                    throw new \RuntimeException('mysqldump failed');
+                    throw new \RuntimeException(\$dumpBinary .' failed');
                 }
             }
             \$result = ['ok' => true, 'path' => \$destination];
