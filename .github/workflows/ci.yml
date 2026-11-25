@@ -6,18 +6,20 @@ on:
   pull_request:
 
 jobs:
-  test:
+  mariadb:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         php: ['8.3', '8.4']
+        mariadb: ['10.11', '11.8']
 
     services:
-      mariadb:
-        image: mariadb:11
+      db:
+        image: mariadb:${{ matrix.mariadb }}
         env:
           MARIADB_ROOT_PASSWORD: root
+          MARIADB_ROOT_HOST: "%"
           MARIADB_DATABASE: app
         ports:
           - 3306:3306
@@ -33,11 +35,16 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: dom, mbstring, pcov, pdo_sqlite, pdo_mysql
+          extensions: dom, mbstring, pdo_sqlite, pdo_mysql
           coverage: pcov
 
-      - name: Install MySQL client
-        run: sudo apt-get update && sudo apt-get install -y default-mysql-client
+      - name: Install MariaDB client
+        run: sudo apt-get update && sudo apt-get install -y mariadb-client
+
+      - name: Check MariaDB client
+        run: |
+          mariadb-dump --version
+          mysqldump --version
 
       - name: Install dependencies
         run: composer install --prefer-dist --no-interaction --no-progress
@@ -49,9 +56,91 @@ jobs:
         run: composer stan
 
       - name: Tests with coverage
+        if: matrix.php == '8.3' && matrix.mariadb == '10.11'
         env:
           SCHEMA_MYSQL_HOST: 127.0.0.1
           SCHEMA_MYSQL_PORT: 3306
           SCHEMA_MYSQL_USER: root
           SCHEMA_MYSQL_PASSWORD: root
-        run: vendor/bin/pest --coverage --min=80
+          SCHEMA_DB_FLAVOR: mariadb
+          SCHEMA_DB_VERSION: ${{ matrix.mariadb }}
+        run: vendor/bin/pest --coverage --min=80 --colors=never
+
+      - name: Tests
+        if: matrix.php != '8.3' || matrix.mariadb != '10.11'
+        env:
+          SCHEMA_MYSQL_HOST: 127.0.0.1
+          SCHEMA_MYSQL_PORT: 3306
+          SCHEMA_MYSQL_USER: root
+          SCHEMA_MYSQL_PASSWORD: root
+          SCHEMA_DB_FLAVOR: mariadb
+          SCHEMA_DB_VERSION: ${{ matrix.mariadb }}
+        run: vendor/bin/pest --colors=never
+
+  mysql:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.3', '8.4']
+
+    services:
+      db:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_ROOT_HOST: "%"
+          MYSQL_DATABASE: app
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -uroot -proot --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: dom, mbstring, pdo_sqlite, pdo_mysql
+          coverage: pcov
+
+      - name: Install MySQL client
+        run: sudo apt-get update && sudo apt-get install -y default-mysql-client
+
+      - name: Check MySQL client
+        run: mysqldump --version
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Validate composer.json
+        run: composer validate --no-check-publish
+
+      - name: Static analysis
+        run: composer stan
+
+      - name: Tests with coverage
+        if: matrix.php == '8.3'
+        env:
+          SCHEMA_MYSQL_HOST: 127.0.0.1
+          SCHEMA_MYSQL_PORT: 3306
+          SCHEMA_MYSQL_USER: root
+          SCHEMA_MYSQL_PASSWORD: root
+          SCHEMA_DB_FLAVOR: mysql
+          SCHEMA_DB_VERSION: '8.4'
+        run: vendor/bin/pest --coverage --min=80 --colors=never
+
+      - name: Tests
+        if: matrix.php != '8.3'
+        env:
+          SCHEMA_MYSQL_HOST: 127.0.0.1
+          SCHEMA_MYSQL_PORT: 3306
+          SCHEMA_MYSQL_USER: root
+          SCHEMA_MYSQL_PASSWORD: root
+          SCHEMA_DB_FLAVOR: mysql
+          SCHEMA_DB_VERSION: '8.4'
+        run: vendor/bin/pest --colors=never
