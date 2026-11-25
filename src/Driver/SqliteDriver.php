@@ -20,6 +20,12 @@ final class SqliteDriver implements DriverInterface
     }
 
 
+    public function dialect(): SqlDialectInterface
+    {
+        return new SqliteDialect();
+    }
+
+
     public function version(PDO $pdo): string
     {
         $statement = $pdo->query('SELECT sqlite_version()');

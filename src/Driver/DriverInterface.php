@@ -16,4 +16,6 @@ interface DriverInterface
     public function unsupportedObjects(PDO $pdo): array;
 
     public function inspect(PDO $pdo): SchemaState;
+
+    public function dialect(): SqlDialectInterface;
 }
