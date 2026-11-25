@@ -7,11 +7,11 @@ use Rush\Contract\InputInterface;
 use Rush\Contract\Option;
 use Rush\Contract\OutputInterface;
 use Rush\Tool\Schema\Canonical\SchemaHasher;
-use Rush\Tool\Schema\Config\DatabaseConfig;
-use Rush\Tool\Schema\Connection;
-use Rush\Tool\Schema\Domain\SchemaState;
-use Rush\Tool\Schema\Driver\SqliteDriver;
-use Rush\Tool\Schema\Repository\SchemaRepository;
+use Rush\Tool\Schema\Diff\SchemaDiff;
+use Rush\Tool\Schema\Exception\TraceException;
+use Rush\Tool\Schema\Trace\Checkpoint;
+use Rush\Tool\Schema\Trace\Save;
+use Rush\Tool\Schema\Trace\TraceRepository;
 
 
 final class StatusCommand extends CommandAbstract
@@ -23,127 +23,240 @@ final class StatusCommand extends CommandAbstract
 
     public function description(): string
     {
-        return 'Show local schema state or compare a target database';
+        return 'Show local schema state or compare a target';
     }
 
     /** @return list<Option> */
     protected function commandOptions(): array
     {
         return [
-            new Option('database', 'Database name', true, null, false, 'name'),
-            new Option('target', 'Target to compare', true, null, false, 'name'),
+            $this->databaseOption(),
+            new Option('target', 'Target to compare', true, null, false, 'name', 'T'),
+            new Option('json', 'Output JSON', false, null, false, 'value', 'j'),
         ];
     }
 
     public function run(InputInterface $input, OutputInterface $output): int
     {
         $database = $this->database($input);
-        $repository = new SchemaRepository($this->projectRoot, $database->name);
+        $trace = $this->trace($database);
 
-        if ( ! $repository->initialized()) {
-            $this->out($output, $database->name, 'not initialized');
+        if ( ! $trace->initialized()) {
+            $this->out($output, $database, 'not initialized');
 
             return ExitCode::Failure->value;
         }
 
         $target = $input->string('target');
 
-        if ($target === null || $target === '') {
-            return $this->local($output, $database->name, $repository);
-        }
-
-        return $this->target($output, $database, $repository, $target);
+        return $target === null || $target === ''
+            ? $this->local($input, $output, $trace)
+            : $this->target($input, $output, $trace, $target);
     }
 
 
-    private function local(OutputInterface $output, string $database, SchemaRepository $repository): int
+    private function local(InputInterface $input, OutputInterface $output, TraceRepository $trace): int
     {
-        $genesis = $repository->genesis();
-        $state = $repository->genesisState();
+        $database = $this->database($input);
+        $head = $trace->requireSave((string) $trace->head());
+        $latest = $trace->latestCheckpointInAncestry($head->id);
+        $session = $this->session($database, $this->localTarget($database), true);
+        $state = $session->inspect();
+        $hash = (new SchemaHasher())->hash($state);
+        $dirty = ! hash_equals($head->toHash, $hash);
+        $diff = $dirty ? SchemaDiff::between($trace->state($head->toHash), $state) : new SchemaDiff([], false);
+        $headCheckpoint = $trace->checkpointForSave($head->id);
+        $savesSince = $latest === null ? [] : $this->savesAfter($trace, $latest->save);
 
-        if ($genesis === null || $state === null) {
-            $this->out($output, $database, 'invalid genesis');
+        $data = [
+            'database' => $database->name,
+            'driver' => $database->driver,
+            'head' => $head->id,
+            'headLabel' => $head->label,
+            'headHash' => $head->toHash,
+            'liveHash' => $hash,
+            'dirty' => $dirty,
+            'checkpoint' => $latest?->id,
+            'checkpointSave' => $latest?->save,
+            'headHasCheckpoint' => $headCheckpoint !== null,
+            'savesSinceCheckpoint' => count($savesSince),
+            'changes' => $diff->summary(),
+            'destructive' => $diff->destructive,
+            'checkpoints' => count($trace->allCheckpoints()),
+        ];
 
-            return ExitCode::CheckFailed->value;
+        if ($input->bool('json')) {
+            $output->line($this->json($data));
+        } else {
+            $this->out($output, $database, 'HEAD: '. $head->id . ($head->label === null ? '' : ' ('. $head->label .')'));
+            $this->out($output, $database, 'checkpoint: '. ($latest === null ? "-" : $latest->id));
+            $this->out($output, $database, 'schemaHash: '. $head->toHash);
+            $this->out($output, $database, 'localHash: '. $hash);
+            $this->out($output, $database, 'dirty: '. ($dirty ? 'yes' : 'no'));
+            $this->out($output, $database, 'saves since checkpoint: '. count($savesSince));
+            $this->out($output, $database, 'checkpoints: '. count($trace->allCheckpoints()));
+
+            if ($dirty) {
+                $this->out($output, $database, 'changes: '. $this->changes($diff));
+                $this->out($output, $database, 'destructive: '. ($diff->destructive ? 'yes' : 'no'));
+            }
         }
 
-        $hash = (new SchemaHasher())->hash(SchemaState::fromArray($state));
-        $expected = $genesis['schemaHash'] ?? null;
-        $releaseSqlPath = rtrim($repository->projectRoot(), '/') .'/schema/'. $database .'/genesis/release.sql';
-        $releaseSql = is_file($releaseSqlPath) ? file_get_contents($releaseSqlPath) : false;
-        $releaseHash = is_string($releaseSql) ? 'sha256:'. hash('sha256', $releaseSql) : null;
-        $checkpoint = $repository->checkpoint('GENESIS');
+        $clean = ! $dirty && $headCheckpoint !== null;
 
-        $this->out($output, $database, 'HEAD: '. ($repository->head() ?? '-'));
-        $this->out($output, $database, 'genesis: '. (is_string($expected) ? $expected : '-'));
-        $this->out($output, $database, 'schemaHash: '. $hash);
-        $this->out($output, $database, 'checkpoint: '. ($checkpoint === null ? 'missing' : 'GENESIS'));
-        $this->out($output, $database, 'stage: '. ($repository->stageExists() ? 'pending' : 'none'));
-
-        $artifacts = $genesis['artifacts'] ?? null;
-        $releaseArtifact = is_array($artifacts) ? ($artifacts['release'] ?? null) : null;
-
-        $valid = is_string($expected)
-            && hash_equals($expected, $hash)
-            && $releaseHash !== null
-            && $releaseArtifact === $releaseHash
-            && $checkpoint !== null
-            && ($checkpoint['schemaHash'] ?? null) === $hash;
-
-        $this->out($output, $database, $valid ? 'local: OK' : 'local: invalid');
-
-        return $valid ? ExitCode::Success->value : ExitCode::CheckFailed->value;
+        return $clean ? ExitCode::Success->value : ExitCode::CheckFailed->value;
     }
 
 
     private function target(
+        InputInterface $input,
         OutputInterface $output,
-        DatabaseConfig $database,
-        SchemaRepository $repository,
+        TraceRepository $trace,
         string $target,
     ): int {
+        $database = $this->database($input);
         $targetConfig = $database->target($target);
-
-        if ( ! $targetConfig->isLocal()) {
-            $this->out($output, $database->name, 'transport: '. $targetConfig->transport);
-        }
-
-        $pdo = Connection::connect($this->projectRoot, $database, $targetConfig, true);
-        $driver = new SqliteDriver();
-        $unsupported = $driver->unsupportedObjects($pdo);
-
-        if ($unsupported !== []) {
-            foreach ($unsupported as $object) {
-                $this->out($output, $database->name, 'unsupported: '. $object);
-            }
-
-            return ExitCode::CheckFailed->value;
-        }
-
-        $state = $driver->inspect($pdo);
+        $session = $this->session($database, $targetConfig, true);
+        $state = $session->inspect();
         $hash = (new SchemaHasher())->hash($state);
-        $genesis = $repository->genesis();
-        $genesisHash = $genesis['schemaHash'] ?? null;
+        $latest = $trace->latestCheckpoint();
 
-        $this->out($output, $database->name, 'target: '. $target);
-        $this->out($output, $database->name, 'driver: sqlite '. $driver->version($pdo));
-        $this->out($output, $database->name, 'schemaHash: '. $hash);
-        $this->out($output, $database->name, 'release: '. ($repository->head() ?? '-'));
-
-        if (is_string($genesisHash) && hash_equals($genesisHash, $hash)) {
-            $this->out($output, $database->name, 'state: CLEAN');
-
-            return ExitCode::Success->value;
+        if ($latest === null) {
+            throw new TraceException('schema: no checkpoint found; run schema checkpoint');
         }
 
-        $this->out($output, $database->name, 'state: DRIFT');
+        $matches = $this->matchingSaves($trace, $hash);
+        $checkpoints = $this->matchingCheckpoints($trace, $hash);
+        $latestState = $trace->state($latest->schemaHash);
+        $diff = SchemaDiff::between($state, $latestState);
+        $relation = $this->relation($trace, $hash, $latest, $matches);
+        $forwardPossible = $this->forwardPossible($trace, $latest, $matches);
 
-        return ExitCode::Success->value;
+        $data = [
+            'database' => $database->name,
+            'target' => $target,
+            'transport' => $targetConfig->transport,
+            'driver' => $database->driver,
+            'schemaHash' => $hash,
+            'checkpoint' => $latest->id,
+            'checkpointHash' => $latest->schemaHash,
+            'relation' => $relation,
+            'forwardPossible' => $forwardPossible,
+            'matches' => array_map(static fn (Save $save): string => $save->id, $matches),
+            'checkpoints' => array_map(static fn (Checkpoint $checkpoint): string => $checkpoint->id, $checkpoints),
+            'changesToCheckpoint' => $diff->summary(),
+            'destructive' => $diff->destructive,
+        ];
+
+        if ($input->bool('json')) {
+            $output->line($this->json($data));
+        } else {
+            $this->out($output, $database, 'target: '. $target .' ('. $targetConfig->transport .')');
+            $this->out($output, $database, 'schemaHash: '. $hash);
+            $this->out($output, $database, 'checkpoint: '. $latest->id);
+            $this->out($output, $database, 'relation: '. $relation);
+            $this->out($output, $database, 'matches: '. (($matches === []) ? 'none' : implode(', ', array_map(static fn (Save $save): string => $save->id, $matches))));
+            $this->out($output, $database, 'forward possible: '. ($forwardPossible ? 'yes' : 'no'));
+            $this->out($output, $database, 'changes to checkpoint: '. $this->changes($diff));
+            $this->out($output, $database, 'destructive: '. ($diff->destructive ? 'yes' : 'no'));
+        }
+
+        return $relation === 'current' ? ExitCode::Success->value : ExitCode::CheckFailed->value;
     }
 
 
-    private function out(OutputInterface $output, string $database, string $message): void
+    /** @return list<Save> */
+    private function matchingSaves(TraceRepository $trace, string $hash): array
     {
-        $output->line('['. $database .'] '. $message);
+        return array_values(array_filter(
+            $trace->allSaves(),
+            static fn (Save $save): bool => hash_equals($save->toHash, $hash),
+        ));
+    }
+
+
+    /** @return list<Checkpoint> */
+    private function matchingCheckpoints(TraceRepository $trace, string $hash): array
+    {
+        return array_values(array_filter(
+            $trace->allCheckpoints(),
+            static fn (Checkpoint $checkpoint): bool => hash_equals($checkpoint->schemaHash, $hash),
+        ));
+    }
+
+
+    /** @param list<Save> $matches */
+    private function relation(TraceRepository $trace, string $hash, Checkpoint $latest, array $matches): string
+    {
+        if (hash_equals($latest->schemaHash, $hash)) {
+            return 'current';
+        }
+
+        foreach ($matches as $match) {
+            if ($trace->isAncestor($match->id, $latest->save)) {
+                return 'behind';
+            }
+
+            if ($trace->isAncestor($latest->save, $match->id)) {
+                return 'ahead';
+            }
+        }
+
+        return 'unknown';
+    }
+
+
+    /** @param list<Save> $matches */
+    private function forwardPossible(TraceRepository $trace, Checkpoint $latest, array $matches): bool
+    {
+        foreach ($matches as $match) {
+            if ($trace->isAncestor($match->id, $latest->save)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+
+    /** @return list<Save> */
+    private function savesAfter(TraceRepository $trace, string $save): array
+    {
+        $chain = $trace->chain();
+        $saves = [];
+        $after = false;
+
+        foreach ($chain as $item) {
+            if ($after) {
+                $saves[] = $item;
+            }
+
+            if ($item->id === $save) {
+                $after = true;
+            }
+        }
+
+        return $saves;
+    }
+
+
+    private function changes(SchemaDiff $diff): string
+    {
+        $parts = [];
+
+        foreach ($diff->summary() as $type => $count) {
+            if ($count > 0) {
+                $parts[] = $type .'='. $count;
+            }
+        }
+
+        return $parts === [] ? 'none' : implode(', ', $parts);
+    }
+
+
+    /** @param array<string, mixed> $data */
+    private function json(array $data): string
+    {
+        return json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
     }
 }

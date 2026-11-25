@@ -1,9 +1,18 @@
 <?php declare(strict_types=1);
 
 use Rush\Contract\ExitCode;
+use Rush\Tool\Schema\Command\CheckpointCommand;
+use Rush\Tool\Schema\Command\CheckpointsCommand;
+use Rush\Tool\Schema\Command\DiffCommand;
 use Rush\Tool\Schema\Command\InitCommand;
+use Rush\Tool\Schema\Command\PushCommand;
+use Rush\Tool\Schema\Command\RegressCommand;
+use Rush\Tool\Schema\Command\SaveCommand;
 use Rush\Tool\Schema\Command\StatusCommand;
+use Rush\Tool\Schema\Command\VerifyCommand;
 use Rush\Tool\Schema\Exception\UnsupportedObjectsException;
+use Rush\Tool\Schema\Paths\SchemaPaths;
+use Rush\Tool\Schema\Trace\TraceRepository;
 use Tests\SchemaFixtures;
 
 
@@ -16,35 +25,52 @@ function schemaWorkspaceWithDatabase(string $sql = ''): string
 }
 
 
-test('init creates genesis, release sql, checkpoint and head', function () {
+function schemaRun(\Rush\Contract\CommandInterface $command, array $tokens = []): array
+{
+    $fixture = SchemaFixtures::output();
+    $code = $command->run(SchemaFixtures::input($command, $tokens), $fixture['output']);
+
+    return ['code' => $code, 'text' => SchemaFixtures::read($fixture['stream'])];
+}
+
+
+function schemaTrace(string $root): TraceRepository
+{
+    return new TraceRepository(new SchemaPaths($root, 'default'));
+}
+
+
+test('init creates genesis save and checkpoint', function () {
     $root = schemaWorkspaceWithDatabase(<<<'SQL'
 CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE);
 CREATE VIEW active_users AS SELECT * FROM users;
 SQL);
-    $command = new InitCommand($root);
-    $fixture = SchemaFixtures::output();
+    $run = schemaRun(new InitCommand($root));
 
-    $code = $command->run(SchemaFixtures::input($command, []), $fixture['output']);
+    expect($run['code'])->toBe(ExitCode::Success->value)
+        ->and($run['text'])->toContain('genesis created');
 
-    expect($code)->toBe(ExitCode::Success->value)
-        ->and(is_file($root .'/schema/default/HEAD'))->toBeTrue()
-        ->and(is_file($root .'/schema/default/genesis/genesis.json'))->toBeTrue()
-        ->and(is_file($root .'/schema/default/genesis/schema.json'))->toBeTrue()
-        ->and(is_file($root .'/schema/default/genesis/release.sql'))->toBeTrue()
-        ->and(is_file($root .'/schema/default/checkpoints/GENESIS.json'))->toBeTrue()
-        ->and(trim((string) file_get_contents($root .'/schema/default/HEAD')))->toBe('GENESIS')
-        ->and(SchemaFixtures::read($fixture['stream']))->toContain('genesis created');
+    $trace = schemaTrace($root);
+    $head = $trace->requireSave((string) $trace->head());
+    $checkpoint = $trace->latestCheckpoint();
+
+    expect($head->parent)->toBeNull()
+        ->and($head->label)->toBe('GENESIS')
+        ->and($checkpoint)->not->toBeNull()
+        ->and($trace->allSaves())->toHaveCount(1)
+        ->and($trace->allCheckpoints())->toHaveCount(1)
+        ->and($trace->stateExists($head->toHash))->toBeTrue();
 });
 
 
 test('init refuses an already initialized database', function () {
     $root = schemaWorkspaceWithDatabase('CREATE TABLE users (id INTEGER PRIMARY KEY);');
-    $command = new InitCommand($root);
 
-    $command->run(SchemaFixtures::input($command, []), SchemaFixtures::output()['output']);
-    $code = $command->run(SchemaFixtures::input($command, []), SchemaFixtures::output()['output']);
+    schemaRun(new InitCommand($root));
+    $run = schemaRun(new InitCommand($root));
 
-    expect($code)->toBe(ExitCode::Failure->value);
+    expect($run['code'])->toBe(ExitCode::Failure->value)
+        ->and($run['text'])->toContain('already initialized');
 });
 
 
@@ -57,46 +83,97 @@ BEGIN
     INSERT INTO audit (user_id) VALUES (NEW.id);
 END;
 SQL);
-    $command = new InitCommand($root);
 
-    expect(fn () => $command->run(SchemaFixtures::input($command, []), SchemaFixtures::output()['output']))
+    expect(fn () => schemaRun(new InitCommand($root)))
         ->toThrow(UnsupportedObjectsException::class, 'trigger trg_users_audit');
 });
 
 
-test('status reports local state and target state', function () {
+test('save and checkpoint track structural changes', function () {
     $root = schemaWorkspaceWithDatabase('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);');
-    $init = new InitCommand($root);
-    $init->run(SchemaFixtures::input($init, []), SchemaFixtures::output()['output']);
+    schemaRun(new InitCommand($root));
 
-    $status = new StatusCommand($root);
+    $pdo = new PDO('sqlite:'. $root .'/storage/database.sqlite');
+    $pdo->exec('CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT NOT NULL)');
+    $pdo->exec('CREATE INDEX idx_posts_title ON posts(title)');
 
-    $local = SchemaFixtures::output();
-    expect($status->run(SchemaFixtures::input($status, []), $local['output']))
-        ->toBe(ExitCode::Success->value)
-        ->and(SchemaFixtures::read($local['stream']))->toContain('local: OK');
+    $status = schemaRun(new StatusCommand($root));
+    expect($status['code'])->toBe(ExitCode::CheckFailed->value)
+        ->and($status['text'])->toContain('dirty: yes')
+        ->and($status['text'])->toContain('create_table=1');
 
-    $target = SchemaFixtures::output();
-    expect($status->run(SchemaFixtures::input($status, ['--target=local']), $target['output']))
-        ->toBe(ExitCode::Success->value)
-        ->and(SchemaFixtures::read($target['stream']))->toContain('state: CLEAN');
+    $save = schemaRun(new SaveCommand($root), ['--label=add posts']);
+    expect($save['code'])->toBe(ExitCode::Success->value)
+        ->and($save['text'])->toContain('save created');
+
+    $checkpoint = schemaRun(new CheckpointCommand($root), ['-l', 'v2']);
+    expect($checkpoint['code'])->toBe(ExitCode::Success->value)
+        ->and($checkpoint['text'])->toContain('checkpoint created');
+
+    $status = schemaRun(new StatusCommand($root));
+    expect($status['code'])->toBe(ExitCode::Success->value)
+        ->and($status['text'])->toContain('dirty: no')
+        ->and($status['text'])->toContain('checkpoints: 2');
+
+    $list = schemaRun(new CheckpointsCommand($root));
+    expect($list['code'])->toBe(ExitCode::Success->value)
+        ->and($list['text'])->toContain('label=v2');
+
+    $verify = schemaRun(new VerifyCommand($root));
+    expect($verify['code'])->toBe(ExitCode::Success->value)
+        ->and($verify['text'])->toContain('verify: OK');
+
+    $diff = schemaRun(new DiffCommand($root), ['--from=local', '--to=local', '-m', 'json']);
+    expect($diff['code'])->toBe(ExitCode::Success->value)
+        ->and($diff['text'])->toContain('"changes"');
 });
 
 
-test('status reports drift when the local database changes', function () {
+test('regress creates a forward save that restores an earlier structure', function () {
     $root = schemaWorkspaceWithDatabase('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);');
-    $init = new InitCommand($root);
-    $init->run(SchemaFixtures::input($init, []), SchemaFixtures::output()['output']);
+    schemaRun(new InitCommand($root));
+    $trace = schemaTrace($root);
+    $genesis = $trace->requireSave((string) $trace->head());
 
     $pdo = new PDO('sqlite:'. $root .'/storage/database.sqlite');
-    $pdo->exec('CREATE TABLE extra (id INTEGER PRIMARY KEY)');
+    $pdo->exec('CREATE TABLE posts (id INTEGER PRIMARY KEY)');
+    schemaRun(new SaveCommand($root), ['--checkpoint', '--label=v2']);
 
-    $status = new StatusCommand($root);
-    $fixture = SchemaFixtures::output();
+    $regress = schemaRun(new RegressCommand($root), ['-t', $genesis->id, '-c', '--allow-destructive', '--yes']);
+    expect($regress['code'])->toBe(ExitCode::Success->value)
+        ->and($regress['text'])->toContain('regression saved')
+        ->and($regress['text'])->toContain('backup:');
 
-    expect($status->run(SchemaFixtures::input($status, ['--target=local']), $fixture['output']))
-        ->toBe(ExitCode::Success->value)
-        ->and(SchemaFixtures::read($fixture['stream']))->toContain('state: DRIFT');
+    $trace = schemaTrace($root);
+    $head = $trace->requireSave((string) $trace->head());
+
+    expect($head->toHash)->toBe($genesis->toHash)
+        ->and($trace->checkpointForSave($head->id))->not->toBeNull();
+
+    $verify = schemaRun(new VerifyCommand($root));
+    expect($verify['code'])->toBe(ExitCode::Success->value);
+});
+
+
+test('push local is a no-op when already at the checkpoint', function () {
+    $root = schemaWorkspaceWithDatabase('CREATE TABLE users (id INTEGER PRIMARY KEY);');
+    schemaRun(new InitCommand($root));
+
+    $run = schemaRun(new PushCommand($root), ['-T', 'local']);
+
+    expect($run['code'])->toBe(ExitCode::Success->value)
+        ->and($run['text'])->toContain('already at');
+});
+
+
+test('status target reports current state', function () {
+    $root = schemaWorkspaceWithDatabase('CREATE TABLE users (id INTEGER PRIMARY KEY);');
+    schemaRun(new InitCommand($root));
+
+    $run = schemaRun(new StatusCommand($root), ['-T', 'local', '-j']);
+
+    expect($run['code'])->toBe(ExitCode::Success->value)
+        ->and($run['text'])->toContain('"relation": "current"');
 });
 
 
@@ -105,7 +182,16 @@ test('schema tool registers its commands', function () {
 
     expect(array_keys($tool->commands(sys_get_temp_dir())))->toBe([
         'schema init',
+        'schema save',
+        'schema checkpoint',
+        'schema regress',
         'schema status',
+        'schema diff',
+        'schema checkpoints',
+        'schema verify',
+        'schema targets',
+        'schema push',
+        'schema agent:export',
     ])->and($tool->name())->toBe('schema')
         ->and($tool->version())->toBe('0.1.0');
 });

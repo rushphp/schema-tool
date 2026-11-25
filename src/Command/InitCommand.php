@@ -7,11 +7,10 @@ use Rush\Contract\InputInterface;
 use Rush\Contract\Option;
 use Rush\Contract\OutputInterface;
 use Rush\Tool\Schema\Canonical\SchemaHasher;
-use Rush\Tool\Schema\Connection;
-use Rush\Tool\Schema\Driver\SqliteDriver;
 use Rush\Tool\Schema\Exception\UnsupportedObjectsException;
-use Rush\Tool\Schema\Repository\SchemaRepository;
-use Rush\Tool\Schema\Sql\SqliteSqlGenerator;
+use Rush\Tool\Schema\Trace\Checkpoint;
+use Rush\Tool\Schema\Trace\Save;
+use Rush\Tool\Schema\Ulid;
 
 
 final class InitCommand extends CommandAbstract
@@ -23,67 +22,76 @@ final class InitCommand extends CommandAbstract
 
     public function description(): string
     {
-        return 'Capture the local database structure as Genesis';
+        return 'Capture the local database as GENESIS';
     }
 
     /** @return list<Option> */
     protected function commandOptions(): array
     {
-        return [
-            new Option('database', 'Database name', true, null, false, 'name'),
-        ];
+        return [$this->databaseOption()];
     }
 
     public function run(InputInterface $input, OutputInterface $output): int
     {
         $database = $this->database($input);
-        $target = $database->local();
+        $paths = $this->paths($database);
+        $trace = $this->trace($database);
 
-        $repository = new SchemaRepository($this->projectRoot, $database->name);
-
-        if ($repository->initialized()) {
-            $this->out($output, $database->name, 'already initialized');
-
-            return ExitCode::Failure->value;
-        }
-
-        if ($database->driver !== 'sqlite') {
-            $this->out($output, $database->name, "driver '{$database->driver}' is not implemented yet");
+        if ($trace->initialized()) {
+            $this->out($output, $database, 'already initialized');
 
             return ExitCode::Failure->value;
         }
 
-        $pdo = Connection::connect($this->projectRoot, $database, $target);
-        $driver = new SqliteDriver();
-        $unsupported = $driver->unsupportedObjects($pdo);
+        $session = $this->session($database, $this->localTarget($database), true);
+        $driver = $this->driver($database);
+        $unsupported = $session->unsupportedObjects();
 
         if ($unsupported !== []) {
             throw UnsupportedObjectsException::fromObjects($unsupported);
         }
 
-        $state = $driver->inspect($pdo);
-        $hash = (new SchemaHasher())->hash($state);
-        $releaseSql = (new SqliteSqlGenerator())->release($state);
+        $state = $session->inspect();
+        $hasher = new SchemaHasher();
+        $hash = $hasher->hash($state);
+        $dialect = $driver->dialect();
+        $release = $dialect->release($state);
+        $now = gmdate('c');
+        $saveId = Ulid::generate();
 
-        $repository->writeGenesis(
-            $database,
-            $state,
+        $trace->writeState($state);
+        $trace->writeSave(new Save(
+            $saveId,
+            null,
+            'GENESIS',
+            $now,
+            null,
             $hash,
-            $releaseSql,
-            $driver->version($pdo),
-        );
+            SchemaHasher::hashSql(''),
+            SchemaHasher::hashSql(''),
+            false,
+        ), '', '');
 
-        $this->out($output, $database->name, 'genesis created');
-        $this->out($output, $database->name, 'schemaHash: '. $hash);
-        $this->out($output, $database->name, 'tables: '. count($state->tables) .', views: '. count($state->views));
-        $this->out($output, $database->name, 'HEAD: GENESIS');
+        $checkpointId = 'cp_'. Ulid::generate();
+        $trace->writeCheckpoint(new Checkpoint(
+            $checkpointId,
+            $saveId,
+            'GENESIS',
+            null,
+            $hash,
+            $now,
+            $now,
+            ['release' => SchemaHasher::hashSql($release)],
+        ), $release);
+        $trace->setHead($saveId);
+
+        $this->out($output, $database, 'genesis created');
+        $this->out($output, $database, 'save: '. $saveId);
+        $this->out($output, $database, 'checkpoint: '. $checkpointId);
+        $this->out($output, $database, 'schemaHash: '. $hash);
+        $this->out($output, $database, 'tables: '. count($state->tables) .', views: '. count($state->views));
+        $this->out($output, $database, 'HEAD: '. $saveId);
 
         return ExitCode::Success->value;
-    }
-
-
-    private function out(OutputInterface $output, string $database, string $message): void
-    {
-        $output->line('['. $database .'] '. $message);
     }
 }

@@ -2,12 +2,19 @@
 
 namespace Rush\Tool\Schema;
 
-use RuntimeException;
 use Rush\Contract\CommandInterface;
 use Rush\Contract\ToolInterface;
+use Rush\Tool\Schema\Command\AgentExportCommand;
+use Rush\Tool\Schema\Command\CheckpointCommand;
+use Rush\Tool\Schema\Command\CheckpointsCommand;
+use Rush\Tool\Schema\Command\DiffCommand;
 use Rush\Tool\Schema\Command\InitCommand;
+use Rush\Tool\Schema\Command\PushCommand;
+use Rush\Tool\Schema\Command\RegressCommand;
+use Rush\Tool\Schema\Command\SaveCommand;
 use Rush\Tool\Schema\Command\StatusCommand;
-use Rush\Support\FileSystem;
+use Rush\Tool\Schema\Command\TargetsCommand;
+use Rush\Tool\Schema\Command\VerifyCommand;
 
 
 final class SchemaTool implements ToolInterface
@@ -40,58 +47,22 @@ final class SchemaTool implements ToolInterface
     {
         return [
             'schema init' => new InitCommand($projectRoot),
+            'schema save' => new SaveCommand($projectRoot),
+            'schema checkpoint' => new CheckpointCommand($projectRoot),
+            'schema regress' => new RegressCommand($projectRoot),
             'schema status' => new StatusCommand($projectRoot),
+            'schema diff' => new DiffCommand($projectRoot),
+            'schema checkpoints' => new CheckpointsCommand($projectRoot),
+            'schema verify' => new VerifyCommand($projectRoot),
+            'schema targets' => new TargetsCommand($projectRoot),
+            'schema push' => new PushCommand($projectRoot),
+            'schema agent:export' => new AgentExportCommand($projectRoot),
         ];
     }
 
     /** @return list<string> */
     public function install(string $projectRoot): array
     {
-        $base = rtrim($projectRoot, '/') .'/.rush/schema';
-        $config = $base .'/config.json';
-        $example = dirname(__DIR__) .'/schema.example.json';
-        $lines = [];
-
-        foreach ([$base, $base .'/ssh', $base .'/local/indexes', $base .'/local/targets', $base .'/local/tmp'] as $directory) {
-            if (is_link($directory)) {
-                throw new RuntimeException("refusing to use symlink: {$directory}");
-            }
-
-            if (is_dir($directory)) {
-                $lines[] = 'exists '. $this->display($projectRoot, $directory);
-                continue;
-            }
-
-            FileSystem::ensureDirectory($directory);
-            $lines[] = 'created '. $this->display($projectRoot, $directory);
-        }
-
-        if (is_link($config)) {
-            throw new RuntimeException("refusing to use symlink: {$config}");
-        }
-
-        if (is_file($config)) {
-            $lines[] = 'exists '. $this->display($projectRoot, $config);
-
-            return $lines;
-        }
-
-        FileSystem::copyFile($example, $config);
-        FileSystem::chmod($config, 0600);
-        $lines[] = 'created '. $this->display($projectRoot, $config);
-
-        return $lines;
-    }
-
-
-    private function display(string $projectRoot, string $path): string
-    {
-        $root = rtrim($projectRoot, '/');
-
-        if (str_starts_with($path, $root .'/')) {
-            return substr($path, strlen($root) + 1);
-        }
-
-        return $path;
+        return (new Initializer($projectRoot))->run();
     }
 }

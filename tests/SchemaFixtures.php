@@ -8,6 +8,8 @@ use Rush\Contract\CommandInterface;
 use Rush\Contract\InputInterface;
 use Rush\Manager\Input;
 use Rush\Manager\Output;
+use Rush\Tool\Schema\Paths\SchemaPaths;
+use Rush\Tool\Schema\Trace\TraceRepository;
 
 
 final class SchemaFixtures
@@ -74,6 +76,24 @@ final class SchemaFixtures
     public static function input(CommandInterface $command, array $tokens): InputInterface
     {
         return Input::parse($tokens, $command->options());
+    }
+
+
+    /**
+     *  array{code: int, text: string}
+     */
+    public static function run(CommandInterface $command, array $tokens = []): array
+    {
+        $fixture = self::output();
+        $code = $command->run(self::input($command, $tokens), $fixture['output']);
+
+        return ['code' => $code, 'text' => self::read($fixture['stream'])];
+    }
+
+
+    public static function trace(string $root, string $database = 'default'): TraceRepository
+    {
+        return new TraceRepository(new SchemaPaths($root, $database));
     }
 
 
