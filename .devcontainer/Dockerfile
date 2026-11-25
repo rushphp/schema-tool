@@ -6,7 +6,8 @@ RUN apt-get update && apt-get install -y \
     unzip \
     libonig-dev \
     libxml2-dev \
-    && docker-php-ext-install -j"$(nproc)" dom mbstring \
+    mariadb-client \
+    && docker-php-ext-install -j"$(nproc)" dom mbstring pdo_mysql \
     && rm -rf /var/lib/apt/lists/*
 
 # pcov: driver de cobertura leve para os testes (pest --coverage)

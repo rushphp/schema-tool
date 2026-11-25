@@ -1,6 +1,6 @@
 {
     "name": "rushphp/schema-tool",
-    "description": "RUSH schema tool. Structural database schema versioning for SQLite, MySQL/MariaDB and PostgreSQL.",
+    "description": "RUSH schema tool. Structural database schema versioning for SQLite and MySQL/MariaDB.",
     "type": "library",
     "minimum-stability": "stable",
     "prefer-stable": true,
@@ -19,12 +19,16 @@
         "migration",
         "sqlite",
         "mysql",
-        "mariadb",
-        "postgresql"
+        "mariadb"
     ],
     "support": {
         "issues": "https://github.com/rushphp/schema-tool/issues",
         "source": "https://github.com/rushphp/schema-tool"
+    },
+    "extra": {
+        "rush": {
+            "tool": "Rush\\Tool\\Schema\\SchemaTool"
+        }
     },
     "autoload": {
         "psr-4": {
@@ -39,22 +43,23 @@
     "require": {
         "php": "^8.3",
         "ext-pdo": "*",
-        "rushphp/contract": "^0.1",
-        "rushphp/support": "^0.1"
+        "rushphp/contract": "^0.2",
+        "rushphp/support": "^0.2",
+        "rushphp/rush": "^0.2"
     },
     "require-dev": {
         "ext-pdo_sqlite": "*",
+        "ext-pdo_mysql": "*",
         "phpstan/phpstan": "^2.2",
         "pestphp/pest": "^3.8",
-        "rushphp/rush": "^0.1"
+        "rushphp/testing": "^0.1"
     },
     "suggest": {
         "ext-pdo_sqlite": "For the sqlite driver",
-        "ext-pdo_mysql": "For the mysql/mariadb driver",
-        "ext-pdo_pgsql": "For the postgres driver"
+        "ext-pdo_mysql": "For the mysql/mariadb driver"
     },
     "scripts": {
-        "stan": "phpstan analyse",
+        "stan": "@php vendor/bin/phpstan analyse -c phpstan.neon",
         "test": "pest"
     },
     "config": {

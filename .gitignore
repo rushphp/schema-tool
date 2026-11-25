@@ -1,3 +1,6 @@
+# Local RUSH state
+.rush/
+
 # Composer
 /vendor/
 composer.lock
